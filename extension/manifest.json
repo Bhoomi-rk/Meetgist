@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "MeetGist",
   "version": "1.0",
-  "description": "AI-powered meeting summaries for Google Meet.",
-  "permissions": ["alarms", "notifications", "storage", "activeTab", "scripting"],
+  "description": "AI-powered meeting summaries for Google Meet with multi-modal analysis.",
+  "permissions": ["alarms", "notifications", "storage", "activeTab", "scripting", "tabCapture"],
   "host_permissions": ["https://meet.google.com/*"],
   "background": {
     "service_worker": "background.js"
@@ -11,7 +11,8 @@
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
-      "js": ["content.js"]
+      "js": ["content.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {

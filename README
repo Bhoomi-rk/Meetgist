@@ -1,0 +1,51 @@
+Here’s the fastest way to run it locally on Windows.
+Prereqs
+MongoDB running (local or cloud)
+Node.js 18+ and Python 3.10+
+Chrome (to load the extension)
+API keys: GEMINI_API_KEY; optional: HF_TOKEN (for diarization)
+1) Configure environment
+Create backend/.env:
+MONGO_URI=mongodb://localhost:27017/meetgist
+Create worker/.env:
+MONGO_URI=mongodb://localhost:27017/meetgistGEMINI_API_KEY=YOUR_GEMINI_KEYHF_TOKEN=YOUR_HF_TOKEN   # optionalUSE_GPU=false            # set true only if you have CUDA
+2) Install dependencies
+Backend:
+cd "E:\PROJECTS\Meeting Summarizer\Meetgist\backend"npm install
+Worker (Python):
+cd "E:\PROJECTS\Meeting Summarizer\Meetgist\worker"python -m venv .venv. .venv\Scripts\Activate.ps1pip install --upgrade pippip install -r requirements.txt
+3) Build the popup UI (once)
+cd "E:\PROJECTS\Meeting Summarizer\Meetgist\extension\react-pop"npm installnpm run build
+This generates extension/popup/ used by the Chrome extension.
+4) Start the backend API
+cd "E:\PROJECTS\Meeting Summarizer\Meetgist\backend"node server.js
+Server runs at http://localhost:5000
+5) Load the Chrome extension
+Open Chrome → navigate to chrome://extensions
+Toggle “Developer mode” on
+Click “Load unpacked” and select: E:\PROJECTS\Meeting Summarizer\Meetgist\extension
+6) Use it
+Join a Google Meet. The extension auto-detects the meeting, collects captions, records audio (permission prompt), and on exit uploads to the backend.
+Open the extension popup to view the latest summary after processing completes.
+Optional: test endpoints without Meet
+Transcript-only:
+curl -X POST http://localhost:5000/api/saveTranscript `  -H "Content-Type: application/json" `  -d "{""transcript"":""This is a test meeting transcript."",""source"":""test"",""date"":""2025-11-11T10:00:00Z""}"
+Multi-modal (with audio file):
+curl -X POST http://localhost:5000/api/saveMeeting ^  -F "transcript=Test transcript with audio" ^  -F "title=Test Meeting" ^  -F "date=2025-11-11T10:00:00Z" ^  -F "audio=@C:\path\to\audio.webm" ^  http://localhost:5000/api/saveMeeting
+Notes
+First run of WhisperX/SentenceTransformers may download models (large).
+If you don’t need diarization, omit HF_TOKEN.
+On GPU systems, install the correct PyTorch CUDA build and set USE_GPU=true.
+All tasks for setup and run are complete.
+powershell (28-44)
+ 
+
+I see the Vite build failed because there's no index.html in extension/react-pop. I’ll add a minimal index.html for Vite, then you can rerun the build.
+index.html(new)
++13
+<!doctype html><html lang="en">  <head>    <meta charset="UTF-8" />    <meta name="viewport" content="width=device-width, initial-scale=1.0" />    <title>MeetGist Popup</title>
+I added extension/react-pop/index.html so Vite has an entry file.
+Now run:
+PowerShell:
+cd "E:\PROJECTS\Meeting Summarizer\Meetgist\extension\react-pop"npm run build
+If it succeeds, reload the Chrome extension (the build outputs to extension/popup/).

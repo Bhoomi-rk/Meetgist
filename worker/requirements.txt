@@ -7,3 +7,7 @@ opencv-python
 easyocr
 torch
 whisperx
+requests
+python-dotenv
+pyannote.audio
+soundfile

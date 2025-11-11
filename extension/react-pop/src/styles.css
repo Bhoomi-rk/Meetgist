@@ -126,3 +126,103 @@ button {
   font-weight: bold;
 }
 
+.insight-section {
+  margin: 8px 0;
+  padding: 8px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.insight-section strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #1e3a8a;
+}
+
+.speaker-info {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.speaker-list {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.audio-features {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.feature-grid {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.feature-grid span {
+  background: #f3f4f6;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.sentiment {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.visual-frames {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.frame-card {
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.frame-thumb {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.frame-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.badge {
+  background: #2563eb;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.relevance, .timestamp {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.frame-ocr {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #4b5563;
+  font-style: italic;
+}
+
