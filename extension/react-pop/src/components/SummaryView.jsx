@@ -1,126 +1,209 @@
 import React from "react";
 
-/**
- * SummaryView Component
- * Displays detailed information about a specific meeting summary.
- * Props:
- *  - meeting: meeting object (contains title, summary, actionItems, etc.)
- *  - onDelete: function to delete a meeting
- */
-
 export default function SummaryView({ meeting, onDelete }) {
-  if (!meeting || !meeting.summary) {
+  if (!meeting) {
     return (
       <div className="card">
-        <p style={{ color: "#6b7280" }}>No summary available yet.</p>
+        <p>No meeting data available.</p>
       </div>
     );
   }
 
-  const { 
-    _id, 
-    title, 
-    date, 
-    summary, 
-    actionItems, 
-    importantImages, 
-    urgencyScore,
-    sentiment,
-    sentimentScore,
-    diarization,
-    visualFrames,
-    audioFeatures,
-    multimodalSummary
+  const {
+    _id,
+    title = "Meeting Summary",
+    startedAt,
+    endedAt,
+    summary = "No summary available yet.",
+    actionItems = [],
+    keyPoints = [],
+    sentiment = {},
+    urgencyScore = 0,
+    transcript = "",
+    diarization = { speakers: [], totalSpeakers: 0, segments: [] },
+    audioFeatures = {},
+    visualFrames = [],
+    speakerAnalysis = {},
+    priorityTasks = [],
+    deadlines = []
   } = meeting;
-  
-  // Parse multimodal summary if it's a string
-  let multimodalInsights = {};
-  if (multimodalSummary) {
-    try {
-      multimodalInsights = typeof multimodalSummary === 'string' 
-        ? JSON.parse(multimodalSummary) 
-        : multimodalSummary;
-    } catch (e) {
-      console.warn('Failed to parse multimodal summary:', e);
-    }
-  }
+
+  // Calculate meeting duration
+  const duration = startedAt
+    ? Math.round(((endedAt ? new Date(endedAt) : new Date()) - new Date(startedAt)) / 60000)
+    : 0;
+
+  // Format date and time
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
+
+  // Get speaker analysis data
+  const speakers = speakerAnalysis?.speakers || [];
+  const engagementScore = speakerAnalysis?.engagementScore || 0;
 
   return (
-    <div className="card summary-view">
-      <h3>{title || "Untitled Meeting"}</h3>
-      <p className="meta">
-        {date ? new Date(date).toLocaleString() : "Date not available"}
-      </p>
+    <div className="meeting-summary">
+      {/* Header Section */}
+      <div className="meeting-header">
+        <h2>{title}</h2>
+        <div className="meeting-meta">
+          <span>📅 {formatDate(startedAt)}</span>
+          <span>⏱️ {duration} minutes</span>
+          {sentiment.overall && (
+            <span className={`sentiment-${sentiment.overall.toLowerCase()}`}>
+              {sentiment.overall} Sentiment
+            </span>
+          )}
+          <span className={`engagement-${Math.floor(engagementScore / 20)}`}>
+            {engagementScore}% Engagement
+          </span>
+        </div>
+      </div>
 
-      <p className="summary-text">{summary}</p>
+      {/* Summary Section */}
+      <div className="summary-section">
+        <h3>📋 Meeting Summary</h3>
+        <p className="summary-text">{summary || transcript.substring(0, 300) + '...'}</p>
+      </div>
 
-      {importantImages && importantImages.length > 0 && (
-        <>
-          <h4>📸 Important Images</h4>
-          <div className="images">
-            {importantImages.map((url, i) => (
-              <img
-                key={i}
-                src={url}
-                alt={`Important ${i + 1}`}
-                className="thumb"
-              />
-            ))}
-          </div>
-        </>
-      )}
-
-      {actionItems && actionItems.length > 0 && (
-        <>
-          <h4>📝 Action Items</h4>
-          <ul className="action-list">
-            {actionItems.map((a, i) => (
-              <li key={i} className="action-item">
-                <span>{typeof a === "string" ? a : a.text}</span>
-                {a.owner && <span className="owner"> — {a.owner}</span>}
-                {a.due && (
-                  <span className="due">
-                    ⏰ Due: {new Date(a.due).toLocaleDateString()}
-                  </span>
+      {/* Key Points */}
+      {keyPoints.length > 0 && (
+        <div className="key-points">
+          <h3>🔑 Key Points Discussed</h3>
+          <ul>
+            {keyPoints.map((point, i) => (
+              <li key={i}>
+                <span className="point-text">{point.text || point}</span>
+                {point.speaker && (
+                  <span className="point-speaker">— {point.speaker}</span>
                 )}
               </li>
             ))}
           </ul>
-        </>
+        </div>
       )}
 
-      {/* Multimodal Insights */}
-      {multimodalInsights && Object.keys(multimodalInsights).length > 0 && (
-        <>
-          <h4>🔍 Multi-Modal Insights</h4>
-          {multimodalInsights.key_visuals && (
-            <div className="insight-section">
-              <strong>Key Visuals:</strong>
-              <p>{multimodalInsights.key_visuals}</p>
-            </div>
-          )}
-          {multimodalInsights.speaker_dynamics && (
-            <div className="insight-section">
-              <strong>Speaker Dynamics:</strong>
-              <p>{multimodalInsights.speaker_dynamics}</p>
-            </div>
-          )}
-          {multimodalInsights.emotional_tone && (
-            <div className="insight-section">
-              <strong>Emotional Tone:</strong>
-              <p>{multimodalInsights.emotional_tone}</p>
-            </div>
-          )}
-          {multimodalInsights.urgency_indicators && (
-            <div className="insight-section">
-              <strong>Urgency Indicators:</strong>
-              <p>{multimodalInsights.urgency_indicators}</p>
-            </div>
-          )}
-        </>
+      {/* Priority Tasks */}
+      {priorityTasks.length > 0 && (
+        <div className="priority-tasks">
+          <h3>🚨 High Priority Items</h3>
+          <div className="task-grid">
+            {priorityTasks.map((task, i) => (
+              <div key={i} className="task-card">
+                <div className="task-header">
+                  <span className="task-priority">{task.priority}</span>
+                  {task.deadline && (
+                    <span className="task-deadline">
+                      ⏰ {new Date(task.deadline).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                <p className="task-description">{task.description || task.text}</p>
+                {task.owner && (
+                  <div className="task-owner">
+                    <span className="owner-label">Owner:</span>
+                    <span className="owner-name">{task.owner}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* Speaker Information */}
+      {/* Action Items */}
+      {actionItems.length > 0 && (
+        <div className="action-items">
+          <h3>📝 Action Items</h3>
+          <ul className="action-list">
+            {actionItems.map((item, i) => (
+              <li key={i} className="action-item">
+                <input type="checkbox" id={`action-${i}`} />
+                <label htmlFor={`action-${i}`}>
+                  <span className="action-text">{item.text}</span>
+                  {item.owner && (
+                    <span className="action-owner">@{item.owner}</span>
+                  )}
+                  {item.due && (
+                    <span className="action-due">
+                      Due: {new Date(item.due).toLocaleDateString()}
+                    </span>
+                  )}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Speaker Analysis */}
+      {speakers.length > 0 && (
+        <div className="speaker-analysis">
+          <h3>🗣️ Speaker Analysis</h3>
+          <div className="speakers-grid">
+            {speakers.map((speaker, i) => (
+              <div key={i} className="speaker-card">
+                <div className="speaker-header">
+                  <span className="speaker-name">{speaker.name || `Speaker ${i + 1}`}</span>
+                  <span className="speaker-role">{speaker.role || 'Participant'}</span>
+                </div>
+                <div className="speaker-stats">
+                  <div className="stat">
+                    <span className="stat-label">Talk Time:</span>
+                    <span className="stat-value">{speaker.talkTime || 0}%</span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">Engagement:</span>
+                    <span className="stat-value">{speaker.engagement || 0}%</span>
+                  </div>
+                </div>
+                {speaker.keyPoints && speaker.keyPoints.length > 0 && (
+                  <div className="speaker-key-points">
+                    <div className="key-points-title">Key Contributions:</div>
+                    <ul>
+                      {speaker.keyPoints.slice(0, 3).map((point, j) => (
+                        <li key={j}>{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Deadlines */}
+      {deadlines && deadlines.length > 0 && (
+        <div className="deadlines">
+          <h3>⏳ Upcoming Deadlines</h3>
+          <ul className="deadline-list">
+            {deadlines
+              .sort((a, b) => new Date(a.date) - new Date(b.date))
+              .map((deadline, i) => (
+                <li key={i} className="deadline-item">
+                  <div className="deadline-date">
+                    {new Date(deadline.date).toLocaleDateString()}
+                  </div>
+                  <div className="deadline-content">
+                    <div className="deadline-title">{deadline.title}</div>
+                    {deadline.description && (
+                      <div className="deadline-description">{deadline.description}</div>
+                    )}
+                    {deadline.owner && (
+                      <div className="deadline-owner">Owner: {deadline.owner}</div>
+                    )}
+                  </div>
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Diarization */}
       {diarization && diarization.totalSpeakers > 0 && (
         <div className="speaker-info">
           <strong>👥 Speakers:</strong> {diarization.totalSpeakers}
@@ -133,7 +216,7 @@ export default function SummaryView({ meeting, onDelete }) {
       )}
 
       {/* Audio Features */}
-      {audioFeatures && (
+      {audioFeatures && Object.keys(audioFeatures).length > 0 && (
         <div className="audio-features">
           <strong>🎵 Audio Analysis:</strong>
           <div className="feature-grid">
@@ -160,20 +243,20 @@ export default function SummaryView({ meeting, onDelete }) {
                 sentiment === "positive"
                   ? "green"
                   : sentiment === "negative"
-                  ? "red"
-                  : "gray",
+                    ? "red"
+                    : "gray",
               fontWeight: "bold"
             }}
           >
-            {sentiment}
-            {sentimentScore && ` (${(sentimentScore * 100).toFixed(0)}%)`}
+            {sentiment.overall || sentiment}
+            {sentiment.score && ` (${(sentiment.score * 100).toFixed(0)}%)`}
           </span>
         </div>
       )}
 
-      {/* Enhanced Visual Frames */}
+      {/* Visual Frames */}
       {visualFrames && visualFrames.length > 0 && (
-        <>
+        <div className="visual-section">
           <h4>🎬 Key Visual Frames</h4>
           <div className="visual-frames">
             {visualFrames.slice(0, 5).map((frame, i) => (
@@ -198,28 +281,35 @@ export default function SummaryView({ meeting, onDelete }) {
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
 
-      <div className="urgency">
-        <strong>Urgency Score:</strong>{" "}
-        <span
-          style={{
-            color:
-              urgencyScore > 7
+      {/* Urgency Score and Delete Button */}
+      <div className="footer-actions">
+        <div className="urgency">
+          <strong>Urgency Score:</strong>{" "}
+          <span
+            style={{
+              color: urgencyScore > 7
                 ? "red"
                 : urgencyScore > 4
-                ? "orange"
-                : "green",
-          }}
-        >
-          {urgencyScore ? urgencyScore.toFixed(2) : "0.00"}
-        </span>
+                  ? "orange"
+                  : "green",
+            }}
+          >
+            {urgencyScore ? urgencyScore.toFixed(2) : "0.00"}
+          </span>
+        </div>
+        {onDelete && (
+          <button
+            className="delete-btn"
+            onClick={() => onDelete(_id)}
+            aria-label="Delete summary"
+          >
+            🗑️ Delete Summary
+          </button>
+        )}
       </div>
-
-      <button className="delete-btn" onClick={() => onDelete(_id)}>
-        🗑️ Delete Summary
-      </button>
     </div>
   );
 }

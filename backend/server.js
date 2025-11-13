@@ -1,173 +1,247 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
+const http = require('http');
+const socketIo = require('socket.io');
 const cors = require('cors');
-const bodyParser = require('body-parser');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const { spawn } = require('child_process');
-const Meeting = require('./models/Meeting');
+const mongoose = require('mongoose');
+const { OpenAI } = require('openai');
+
 const app = express();
-
-// Create directories for uploads
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
-const imagesDir = path.join(__dirname, 'public', 'images');
-[uploadsDir, imagesDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
-
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 500 * 1024 * 1024 // 500MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedMimes = [
-      'audio/mpeg', 'audio/wav', 'audio/webm', 'audio/ogg',
-      'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
-    ];
-    if (allowedMimes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only audio and video files are allowed.'));
-    }
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST"]
   }
 });
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
-app.use('/uploads', express.static(uploadsDir));
+app.use(express.json());
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meetgist', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-})
-  .then(() => console.log('✅ Connected to MongoDB'))
-  .catch((err) => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
+});
+
+const db = mongoose.connection;
+db.on('error', console.error.bind(console, 'MongoDB connection error:'));
+db.once('open', () => {
+  console.log('✅ Connected to MongoDB');
+});
+
+// Models
+const meetingSchema = new mongoose.Schema({
+  title: String,
+  startedAt: Date,
+  endedAt: Date,
+  transcript: String,
+  summary: String,
+  keyPoints: [String],
+  actionItems: [{
+    text: String,
+    assignee: String,
+    dueDate: Date
+  }],
+  sentiment: {
+    overall: String,
+    score: Number
+  },
+  diarization: {
+    speakers: [{
+      id: Number,
+      name: String
+    }],
+    totalSpeakers: Number,
+    segments: [{
+      speaker: Number,
+      text: String,
+      startTime: Number,
+      endTime: Number
+    }]
+  },
+  audioFeatures: {
+    speakingRate: Number,
+    pitch: Number,
+    volume: Number
+  }
+}, { timestamps: true });
+
+const Meeting = mongoose.model('Meeting', meetingSchema);
+
+// OpenAI Client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Helper Functions
+async function generateSummary(transcript) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant that summarizes meeting transcripts. Provide a concise summary of the key points discussed."
+        },
+        {
+          role: "user",
+          content: `Please summarize this meeting transcript:\n\n${transcript}`
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 500
+    });
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error('Error generating summary:', error);
+    return "Could not generate summary. Please try again later.";
+  }
+}
+
+async function extractKeyPoints(transcript) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant that extracts key points from meeting transcripts. Provide 3-5 bullet points of the most important information."
+        },
+        {
+          role: "user",
+          content: `Extract key points from this meeting transcript:\n\n${transcript}`
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 200
+    });
+    
+    // Convert the response into an array of key points
+    const content = response.choices[0].message.content;
+    return content.split('\n')
+      .map(point => point.replace(/^[\d-•*]\s*/, '').trim())
+      .filter(point => point.length > 0);
+  } catch (error) {
+    console.error('Error extracting key points:', error);
+    return ["Could not extract key points."];
+  }
+}
+
+// Socket.IO Connection
+io.on('connection', (socket) => {
+  console.log('New client connected');
+
+  socket.on('start_transcription', async ({ meetingId }) => {
+    console.log(`Starting transcription for meeting: ${meetingId}`);
   });
 
-// API Routes with Error Handling
+  socket.on('audio_chunk', async ({ meetingId, chunk }) => {
+    try {
+      // Here you would typically process the audio chunk with a speech-to-text service
+      // For this example, we'll simulate transcription
+      const mockTranscript = "This is a simulated transcript from the audio chunk.";
+      
+      // Update the meeting with the new transcript
+      const meeting = await Meeting.findById(meetingId);
+      if (meeting) {
+        meeting.transcript = (meeting.transcript || '') + ' ' + mockTranscript;
+        await meeting.save();
+        
+        // Send the transcript update to the client
+        socket.emit('transcript', {
+          meetingId,
+          text: mockTranscript
+        });
+      }
+    } catch (error) {
+      console.error('Error processing audio chunk:', error);
+    }
+  });
 
-// Enhanced endpoint for multi-modal meeting data
-app.post('/api/saveMeeting', upload.fields([
-  { name: 'audio', maxCount: 1 },
-  { name: 'video', maxCount: 1 }
-]), async (req, res) => {
+  // Add this new event handler
+  socket.on('get_summary_update', async ({ meetingId }) => {
+    try {
+      const meeting = await Meeting.findById(meetingId);
+      if (meeting && meeting.transcript) {
+        const summary = await generateSummary(meeting.transcript);
+        const keyPoints = await extractKeyPoints(meeting.transcript);
+        
+        // Update meeting with new summary
+        meeting.summary = summary;
+        meeting.keyPoints = keyPoints;
+        await meeting.save();
+        
+        // Send update to client
+        socket.emit('summary_update', {
+          meetingId,
+          summary,
+          keyPoints
+        });
+      }
+    } catch (error) {
+      console.error('Error generating summary update:', error);
+    }
+  });
+
+  socket.on('end_meeting', async ({ meetingId }) => {
+    try {
+      const meeting = await Meeting.findById(meetingId);
+      if (meeting) {
+        // Generate final summary and key points
+        const summary = await generateSummary(meeting.transcript);
+        const keyPoints = await extractKeyPoints(meeting.transcript);
+        
+        // Update meeting
+        meeting.endedAt = new Date();
+        meeting.summary = summary;
+        meeting.keyPoints = keyPoints;
+        await meeting.save();
+        
+        // Send final update to client
+        socket.emit('meeting_ended', {
+          meetingId: meeting._id,
+          endedAt: meeting.endedAt,
+          summary,
+          keyPoints
+        });
+      }
+    } catch (error) {
+      console.error('Error ending meeting:', error);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Routes
+app.get('/api/meetings', async (req, res) => {
   try {
-    const { transcript, source, date, title } = req.body;
-    const audioFile = req.files?.audio?.[0];
-    const videoFile = req.files?.video?.[0];
-    
-    // Prepare meeting data
-    const meetingData = {
-      transcript: transcript || '',
-      source: source || 'google-meet',
-      date: date || new Date().toISOString(),
-      title: title || 'Meeting',
-      status: 'processing'
-    };
-    
-    // Add file paths if uploaded
-    if (audioFile) {
-      meetingData.audioPath = audioFile.path;
-    }
-    if (videoFile) {
-      meetingData.videoPath = videoFile.path;
-    }
-    
-    const m = new Meeting(meetingData);
-    await m.save();
-
-    // Start processing in background
-    const py = spawn('python3', [
-      path.join(__dirname, '../worker/process_meeting.py'),
-      m._id.toString()
-    ], {
-      cwd: path.join(__dirname, '../worker')
-    });
-
-    py.stdout.on('data', (d) => console.log('py:', d.toString()));
-    py.stderr.on('data', (d) => console.error('py-err:', d.toString()));
-    
-    py.on('error', (err) => {
-      console.error('❌ Failed to start Python process:', err);
-    });
-
-    res.json({ ok: true, id: m._id, message: 'Meeting saved and processing started' });
+    const meetings = await Meeting.find().sort({ createdAt: -1 });
+    res.json(meetings);
   } catch (error) {
-    console.error('❌ Error saving meeting:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to fetch meetings' });
   }
 });
 
-// Legacy endpoint for transcript-only (backward compatibility)
-app.post('/api/saveTranscript', async (req, res) => {
+app.post('/api/meetings', async (req, res) => {
   try {
-    const { transcript, source, date } = req.body;
-    const m = new Meeting({ transcript, source, date, status: 'processing' });
-    await m.save();
-
-    const py = spawn('python3', [
-      path.join(__dirname, '../worker/process_meeting.py'),
-      m._id.toString()
-    ], {
-      cwd: path.join(__dirname, '../worker')
+    const meeting = new Meeting({
+      title: req.body.title || 'New Meeting',
+      startedAt: new Date()
     });
-
-    py.stdout.on('data', (d) => console.log('py:', d.toString()));
-    py.stderr.on('data', (d) => console.error('py-err:', d.toString()));
-
-    res.json({ ok: true, id: m._id });
+    await meeting.save();
+    res.status(201).json(meeting);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to create meeting' });
   }
 });
 
- app.get('/api/lastSummary', async (req,res)=>{
- const last = await Meeting.findOne().sort({createdAt:-1});
- res.json(last||{});
- });
-
-
- app.get('/api/allMeetings', async (req,res)=>{
- const all = await Meeting.find().sort({createdAt:-1});
- res.json(all);
- });
-
- app.get('/api/meeting/:id', async (req,res)=>{ const m = await
- Meeting.findById(req.params.id); res.json(m||{}); });
-
- app.post('/api/updateLast', async (req,res)=>{
- const last = await Meeting.findOne().sort({createdAt:-1});
- if (!last) return res.json({error:'no meeting'});
- const { title, date } = req.body;
- last.title = title || last.title;
- last.date = date || last.date;
- await last.save();
- res.json({ok:true});
- });
-
- app.delete('/api/meeting/:id', async (req,res)=>{ await
- Meeting.deleteOne({_id:req.params.id}); res.json({ok:true}); });
-
- app.listen(5000, ()=> console.log('Server running on http://localhost:5000'));
+// Start server
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
