@@ -1,247 +1,189 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const cors = require('cors');
-const mongoose = require('mongoose');
-const { OpenAI } = require('openai');
+// server.js – FULLY FIXED FOR GROQ
+require("dotenv").config();
+const express = require("express");
+const http = require("http");
+const socketIo = require("socket.io");
+const cors = require("cors");
+const mongoose = require("mongoose");
+const fs = require("fs");
+const path = require("path");
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+const FormData = require("form-data");
 
+const GROQ_KEY = process.env.GROQ_API_KEY;
+const GROQ_URL = "https://api.groq.com/openai/v1";
+
+if (!GROQ_KEY) console.log("❌ Missing GROQ_API_KEY");
+
+// ----------------- SERVER -----------------
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }
 });
 
-// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meetgist', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+// ----------------- MONGO -----------------
+mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/meetgist")
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.error(err));
 
-const db = mongoose.connection;
-db.on('error', console.error.bind(console, 'MongoDB connection error:'));
-db.once('open', () => {
-  console.log('✅ Connected to MongoDB');
-});
-
-// Models
-const meetingSchema = new mongoose.Schema({
+const Meeting = mongoose.model("Meeting", {
   title: String,
   startedAt: Date,
   endedAt: Date,
   transcript: String,
   summary: String,
   keyPoints: [String],
-  actionItems: [{
-    text: String,
-    assignee: String,
-    dueDate: Date
-  }],
-  sentiment: {
-    overall: String,
-    score: Number
-  },
-  diarization: {
-    speakers: [{
-      id: Number,
-      name: String
-    }],
-    totalSpeakers: Number,
-    segments: [{
-      speaker: Number,
-      text: String,
-      startTime: Number,
-      endTime: Number
-    }]
-  },
-  audioFeatures: {
-    speakingRate: Number,
-    pitch: Number,
-    volume: Number
-  }
-}, { timestamps: true });
-
-const Meeting = mongoose.model('Meeting', meetingSchema);
-
-// OpenAI Client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
 });
 
-// Helper Functions
-async function generateSummary(transcript) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a helpful assistant that summarizes meeting transcripts. Provide a concise summary of the key points discussed."
-        },
-        {
-          role: "user",
-          content: `Please summarize this meeting transcript:\n\n${transcript}`
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 500
-    });
-    return response.choices[0].message.content;
-  } catch (error) {
-    console.error('Error generating summary:', error);
-    return "Could not generate summary. Please try again later.";
-  }
+// ----------------- AUDIO HELPERS -----------------
+function mimeToExt(m) {
+  if (!m) return "webm";
+  if (m.includes("wav")) return "wav";
+  if (m.includes("mpeg") || m.includes("mp3")) return "mp3";
+  if (m.includes("ogg")) return "ogg";
+  return "webm";
 }
 
-async function extractKeyPoints(transcript) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+const TMP = path.join(__dirname, "tmp_audio");
+if (!fs.existsSync(TMP)) fs.mkdirSync(TMP);
+
+function saveChunk(id, b64, mime) {
+  const ext = mimeToExt(mime);
+  const file = path.join(TMP, `${id}.${ext}`);
+  fs.appendFileSync(file, Buffer.from(b64, "base64"));
+  return file;
+}
+
+// ----------------- GROQ: Whisper STT -----------------
+async function transcribe(filePath) {
+
+  const form = new FormData();
+  form.append("file", fs.createReadStream(filePath));
+  form.append("model", "whisper-large-v3");
+
+  const res = await fetch(`${GROQ_URL}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${GROQ_KEY}` },
+    body: form
+  });
+
+  const json = await res.json();
+  console.log("STT:", json);
+
+  return json.text || "";
+}
+
+// ----------------- GROQ: SUMMARY -----------------
+
+async function summarize(text) {
+  const res = await fetch(`${GROQ_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+       model: "llama-3.1-8b-instant",
       messages: [
-        {
-          role: "system",
-          content: "You are a helpful assistant that extracts key points from meeting transcripts. Provide 3-5 bullet points of the most important information."
-        },
-        {
-          role: "user",
-          content: `Extract key points from this meeting transcript:\n\n${transcript}`
-        }
+        { role: "system", content: "You summarize meeting transcripts clearly." },
+        { role: "user", content: `Summarize the following meeting in 5 sentences:\n\n${text}` }
       ],
-      temperature: 0.3,
+      temperature: 0.2,
+      max_tokens: 300
+    })
+  });
+
+  const json = await res.json();
+
+  console.log("SUMMARY RESPONSE:", json); // <-- REQUIRED DEBUG LINE
+
+  return json.choices?.[0]?.message?.content || "No summary";
+}
+
+
+
+async function extractPoints(text) {
+  const res = await fetch(`${GROQ_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+       model: "llama-3.1-8b-instant",
+      messages: [
+        { role: "system", content: "You extract key action points." },
+        { role: "user", content: `Extract 5 bullet points:\n\n${text}` }
+      ],
+      temperature: 0.1,
       max_tokens: 200
-    });
-    
-    // Convert the response into an array of key points
-    const content = response.choices[0].message.content;
-    return content.split('\n')
-      .map(point => point.replace(/^[\d-•*]\s*/, '').trim())
-      .filter(point => point.length > 0);
-  } catch (error) {
-    console.error('Error extracting key points:', error);
-    return ["Could not extract key points."];
-  }
+    })
+  });
+
+  const json = await res.json();
+
+  console.log("KEYPOINTS RESPONSE:", json); // <-- REQUIRED DEBUG LINE
+
+  return json.choices?.[0]?.message?.content
+    ?.split("\n")
+    .map(p => p.replace(/^[-*•]\s*/, "").trim())
+    .filter(p => p.length > 0)
+    .slice(0, 5);
 }
 
-// Socket.IO Connection
-io.on('connection', (socket) => {
-  console.log('New client connected');
 
-  socket.on('start_transcription', async ({ meetingId }) => {
-    console.log(`Starting transcription for meeting: ${meetingId}`);
+
+// ----------------- SOCKETS -----------------
+io.on("connection", (socket) => {
+  console.log("Connected:", socket.id);
+
+  socket.on("audio_chunk", ({ meetingId, b64, mimeType }) => {
+    saveChunk(meetingId, b64, mimeType);
   });
 
-  socket.on('audio_chunk', async ({ meetingId, chunk }) => {
-    try {
-      // Here you would typically process the audio chunk with a speech-to-text service
-      // For this example, we'll simulate transcription
-      const mockTranscript = "This is a simulated transcript from the audio chunk.";
-      
-      // Update the meeting with the new transcript
-      const meeting = await Meeting.findById(meetingId);
-      if (meeting) {
-        meeting.transcript = (meeting.transcript || '') + ' ' + mockTranscript;
-        await meeting.save();
-        
-        // Send the transcript update to the client
-        socket.emit('transcript', {
-          meetingId,
-          text: mockTranscript
-        });
-      }
-    } catch (error) {
-      console.error('Error processing audio chunk:', error);
+  socket.on("end_meeting", async ({ meetingId }) => {
+    const m = await Meeting.findById(meetingId);
+    if (!m) return;
+
+    // find file
+    const exts = ["webm", "mp3", "wav", "ogg"];
+    let file = null;
+    for (const e of exts) {
+      const f = path.join(TMP, `${meetingId}.${e}`);
+      if (fs.existsSync(f)) file = f;
     }
+
+    const text = file ? await transcribe(file) : "";
+    m.transcript = text;
+
+    m.summary = await summarize(text);
+    m.keyPoints = await extractPoints(text);
+    m.endedAt = new Date();
+
+    await m.save();
+
+    socket.emit("meeting_ended", m);
   });
 
-  // Add this new event handler
-  socket.on('get_summary_update', async ({ meetingId }) => {
-    try {
-      const meeting = await Meeting.findById(meetingId);
-      if (meeting && meeting.transcript) {
-        const summary = await generateSummary(meeting.transcript);
-        const keyPoints = await extractKeyPoints(meeting.transcript);
-        
-        // Update meeting with new summary
-        meeting.summary = summary;
-        meeting.keyPoints = keyPoints;
-        await meeting.save();
-        
-        // Send update to client
-        socket.emit('summary_update', {
-          meetingId,
-          summary,
-          keyPoints
-        });
-      }
-    } catch (error) {
-      console.error('Error generating summary update:', error);
-    }
+  socket.on("disconnect", () =>
+    console.log("Disconnected:", socket.id)
+  );
+});
+
+// ----------------- ROUTES -----------------
+app.post("/api/meetings", async (req, res) => {
+  const m = await Meeting.create({
+    title: req.body.title,
+    startedAt: new Date()
   });
-
-  socket.on('end_meeting', async ({ meetingId }) => {
-    try {
-      const meeting = await Meeting.findById(meetingId);
-      if (meeting) {
-        // Generate final summary and key points
-        const summary = await generateSummary(meeting.transcript);
-        const keyPoints = await extractKeyPoints(meeting.transcript);
-        
-        // Update meeting
-        meeting.endedAt = new Date();
-        meeting.summary = summary;
-        meeting.keyPoints = keyPoints;
-        await meeting.save();
-        
-        // Send final update to client
-        socket.emit('meeting_ended', {
-          meetingId: meeting._id,
-          endedAt: meeting.endedAt,
-          summary,
-          keyPoints
-        });
-      }
-    } catch (error) {
-      console.error('Error ending meeting:', error);
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log('Client disconnected');
-  });
+  res.json(m);
 });
 
-// Routes
-app.get('/api/meetings', async (req, res) => {
-  try {
-    const meetings = await Meeting.find().sort({ createdAt: -1 });
-    res.json(meetings);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch meetings' });
-  }
-});
-
-app.post('/api/meetings', async (req, res) => {
-  try {
-    const meeting = new Meeting({
-      title: req.body.title || 'New Meeting',
-      startedAt: new Date()
-    });
-    await meeting.save();
-    res.status(201).json(meeting);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create meeting' });
-  }
-});
-
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+// ----------------- RUN -----------------
+server.listen(5000, () =>
+  console.log("🚀 Server running at http://localhost:5000")
+);
