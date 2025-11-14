@@ -187,3 +187,4 @@ app.post("/api/meetings", async (req, res) => {
 server.listen(5000, () =>
   console.log("🚀 Server running at http://localhost:5000")
 );
+server.js
