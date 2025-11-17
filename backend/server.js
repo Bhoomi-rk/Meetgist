@@ -1,190 +1,592 @@
-// server.js – FULLY FIXED FOR GROQ
-require("dotenv").config();
-const express = require("express");
-const http = require("http");
-const socketIo = require("socket.io");
-const cors = require("cors");
-const mongoose = require("mongoose");
-const fs = require("fs");
-const path = require("path");
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+
+require("dotenv").config(); 
+
+const express = require("express"); 
+const http = require("http"); 
+const socketIo = require("socket.io"); 
+const cors = require("cors"); 
+const mongoose = require("mongoose"); 
+const fs = require("fs"); 
+const path = require("path"); 
+const Tesseract = require("tesseract.js"); 
+const os = require("os");
+
+// node-fetch dynamic import helper (works in CommonJS)
+const fetch = (...args) => import("node-fetch").then(({ default: f }) => f(...args)); 
 const FormData = require("form-data");
 
-const GROQ_KEY = process.env.GROQ_API_KEY;
-const GROQ_URL = "https://api.groq.com/openai/v1";
+const GROQ_KEY = process.env.GROQ_API_KEY; 
+const GROQ_URL = "https://api.groq.com/openai/v1"; 
+const PORT = process.env.PORT || 5000;
 
-if (!GROQ_KEY) console.log("❌ Missing GROQ_API_KEY");
-
-// ----------------- SERVER -----------------
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }
+const app = express(); 
+const server = http.createServer(app); 
+const io = socketIo(server, { 
+  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }, 
 });
 
-app.use(cors());
+app.use(cors()); 
 app.use(express.json({ limit: "50mb" }));
 
-// ----------------- MONGO -----------------
-mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/meetgist")
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.error(err));
+// MongoDB (fallback to local)
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/meetgist";
 
-const Meeting = mongoose.model("Meeting", {
-  title: String,
-  startedAt: Date,
-  endedAt: Date,
-  transcript: String,
-  summary: String,
-  keyPoints: [String],
+mongoose
+  .connect(MONGO_URI)
+  .then(() => console.log("MongoDB connected"))
+  .catch((err) => console.error("MongoDB connection error:", err?.message || err));
+
+const Meeting = mongoose.model("Meeting", { 
+  title: String, 
+  startedAt: Date, 
+  endedAt: Date, 
+  transcript: String, 
+  summary: String, 
+  keyPoints: [String], 
+  ocrText: String, 
+  urgency: String, 
+  urgentAudioWords: [String], 
+  importantImages: [String], // store base64 frames (trimmed)
 });
 
-// ----------------- AUDIO HELPERS -----------------
-function mimeToExt(m) {
-  if (!m) return "webm";
-  if (m.includes("wav")) return "wav";
-  if (m.includes("mpeg") || m.includes("mp3")) return "mp3";
-  if (m.includes("ogg")) return "ogg";
-  return "webm";
+// tmp audio directory
+const TMP = path.join(__dirname, "tmp_audio"); 
+if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
+
+let detrPipeline = null;
+
+(async () => { 
+  try { 
+    const { pipeline } = require("@xenova/transformers"); 
+    console.log("Loading DETR model..."); 
+    detrPipeline = await pipeline("object-detection", "Xenova/detr-resnet-50"); 
+    console.log("DETR model loaded."); 
+
+  } catch (err) { 
+    console.error("❌ DETR load error:", err); 
+    detrPipeline = null; 
+  } 
+})();
+
+// Helpers
+function mimeToExt(m) { 
+  if (!m) return "webm"; 
+  m = m.toLowerCase(); 
+  if (m.includes("wav")) return "wav"; 
+  if (m.includes("mpeg") || m.includes("mp3")) return "mp3"; 
+  if (m.includes("ogg")) return "ogg"; 
+  return "webm"; 
 }
 
-const TMP = path.join(__dirname, "tmp_audio");
-if (!fs.existsSync(TMP)) fs.mkdirSync(TMP);
-
-function saveChunk(id, b64, mime) {
-  const ext = mimeToExt(mime);
-  const file = path.join(TMP, `${id}.${ext}`);
-  fs.appendFileSync(file, Buffer.from(b64, "base64"));
-  return file;
+function saveChunk(id, b64, mime) { 
+  const ext = mimeToExt(mime); 
+  const file = path.join(TMP, `${id}.${ext}`); 
+  fs.appendFileSync(file, Buffer.from(b64, "base64")); 
+  return file; 
 }
 
-// ----------------- GROQ: Whisper STT -----------------
-async function transcribe(filePath) {
+function safeBase64ToBuffer(base64) { 
+  if (!base64 || typeof base64 !== "string") return null; 
+  const m = base64.match(/^data:image\/\w+;base64,(.*)$/); 
+  const raw = m ? m[1] : base64; 
+  try { 
+    return Buffer.from(raw, "base64"); 
+  } catch (e) { 
+    return null; 
+  } 
+}
 
-  const form = new FormData();
-  form.append("file", fs.createReadStream(filePath));
-  form.append("model", "whisper-large-v3");
+function extractUrgentAudioWords(text) { 
+  if (!text) return []; 
 
-  const res = await fetch(`${GROQ_URL}/audio/transcriptions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${GROQ_KEY}` },
-    body: form
+  const urgentKeywords = [ 
+    "urgent", "important", "submit", "deadline", "asap", 
+    "immediately", "must", "tonight", "slide", 
+    "priority", "emergency", "critical" 
+  ];
+
+  const found = []; 
+  const lower = text.toLowerCase(); 
+
+  urgentKeywords.forEach(k => { 
+    if (new RegExp(`\\b${k}\\b`, "i").test(lower)) found.push(k); 
   });
 
-  const json = await res.json();
-  console.log("STT:", json);
-
-  return json.text || "";
+  return Array.from(new Set(found)); 
 }
 
-// ----------------- GROQ: SUMMARY -----------------
+// ---------------- GROQ: Whisper STT ----------------
+async function transcribe(filePath) { 
+  if (!GROQ_KEY) { 
+    console.warn("GROQ_KEY missing — skipping STT"); 
+    return ""; 
+  }
 
-async function summarize(text) {
-  const res = await fetch(`${GROQ_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-       model: "llama-3.1-8b-instant",
-      messages: [
-        { role: "system", content: "You summarize meeting transcripts clearly." },
-        { role: "user", content: `Summarize the following meeting in 5 sentences:\n\n${text}` }
-      ],
-      temperature: 0.2,
-      max_tokens: 300
-    })
-  });
+  try { 
+    const form = new FormData(); 
+    form.append("file", fs.createReadStream(filePath)); 
+    form.append("model", "whisper-large-v3");
 
-  const json = await res.json();
+    const res = await fetch(`${GROQ_URL}/audio/transcriptions`, { 
+      method: "POST", 
+      headers: { Authorization: `Bearer ${GROQ_KEY}` }, 
+      body: form, 
+    });
 
-  console.log("SUMMARY RESPONSE:", json); // <-- REQUIRED DEBUG LINE
+    const json = await res.json(); 
+    console.log("STT JSON:", json?.x_groq?.id ? "ok" : json);
 
-  return json.choices?.[0]?.message?.content || "No summary";
+    return json?.text || ""; 
+
+  } catch (err) { 
+    console.error("Transcribe error:", err?.message || err); 
+    return ""; 
+  }
 }
 
+//
+function cleanOCR(text) {
+  if (!text) return "";
 
-
-async function extractPoints(text) {
-  const res = await fetch(`${GROQ_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-       model: "llama-3.1-8b-instant",
-      messages: [
-        { role: "system", content: "You extract key action points." },
-        { role: "user", content: `Extract 5 bullet points:\n\n${text}` }
-      ],
-      temperature: 0.1,
-      max_tokens: 200
-    })
-  });
-
-  const json = await res.json();
-
-  console.log("KEYPOINTS RESPONSE:", json); // <-- REQUIRED DEBUG LINE
-
-  return json.choices?.[0]?.message?.content
-    ?.split("\n")
-    .map(p => p.replace(/^[-*•]\s*/, "").trim())
-    .filter(p => p.length > 0)
-    .slice(0, 5);
+  return text
+    // Remove URLs
+    .replace(/https?:\/\/\S+/gi, "")
+    // Remove Google Meet toolbar text
+    .replace(/is sharing your screen/gi, "")
+    .replace(/stop sharing/gi, "")
+    .replace(/on google meet/gi, "")
+    .replace(/meet gist popup/gi, "")
+    .replace(/presentation \.pptx/gi, "")
+    .replace(/ashmitha u.*/gi, "")
+    // Remove buttons
+    .replace(/\b(hide|share tab|close|presenting)\b/gi, "")
+    // Remove timestamps
+    .replace(/\b\d{1,2}:\d{2}\b/g, "")
+    // Remove long OneDrive IDs
+    .replace(/[a-zA-Z0-9]{15,}/g, "")
+    // Remove special junk symbols
+    .replace(/[^\w\s.,!?]/g, "")
+    // Remove extra spaces
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 
+// ---------------- OCR ----------------
+async function runOCR(imageBase64) { 
+  try { 
+    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, ""); 
+    const buffer = Buffer.from(base64Data, "base64"); 
+    
+    const sharp = require("sharp"); 
+    const processed = await sharp(buffer)
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .toBuffer();
 
-// ----------------- SOCKETS -----------------
-io.on("connection", (socket) => {
-  console.log("Connected:", socket.id);
+    const result = await Tesseract.recognize(processed, "eng"); 
+    console.log(result);
 
-  socket.on("audio_chunk", ({ meetingId, b64, mimeType }) => {
-    saveChunk(meetingId, b64, mimeType);
-  });
+    return (result?.data?.text || "").trim(); 
 
-  socket.on("end_meeting", async ({ meetingId }) => {
-    const m = await Meeting.findById(meetingId);
-    if (!m) return;
+  } catch (err) { 
+    console.error("OCR error:", err); 
+    return ""; 
+  } 
+}
 
-    // find file
-    const exts = ["webm", "mp3", "wav", "ogg"];
-    let file = null;
-    for (const e of exts) {
-      const f = path.join(TMP, `${meetingId}.${e}`);
-      if (fs.existsSync(f)) file = f;
+// ---------------- Urgency ----------------
+async function analyzeUrgency(combinedText) { 
+  try { 
+    const text = (combinedText || "").trim(); 
+    if (!text) return "No text detected"; 
+
+    const lower = text.toLowerCase(); 
+    if (/(urgent|asap|immediately|important|deadline|must|required)/i.test(lower)) { 
+      return "High"; 
     }
 
-    const text = file ? await transcribe(file) : "";
-    m.transcript = text;
+    return "Normal"; 
 
-    m.summary = await summarize(text);
-    m.keyPoints = await extractPoints(text);
-    m.endedAt = new Date();
+  } catch (err) { 
+    console.error("analyzeUrgency error:", err?.message || err); 
+    return "Normal"; 
+  } 
+}
 
-    await m.save();
+// ---------------- Important image detection ----------------
+async function detectImportantImage(imageBase64, ocrText) { 
+  console.log("Detecting important image...", imageBase64, ocrText);
 
-    socket.emit("meeting_ended", m);
-  });
+  if (ocrText && /urgent|important|submit|deadline|asap|today/i.test(ocrText)) { 
+    return { isImportant: true, reason: "OCR urgent keyword" }; 
+  }
 
-  socket.on("disconnect", () =>
-    console.log("Disconnected:", socket.id)
-  );
+  if (!detrPipeline) { 
+    return { isImportant: false, reason: "DETR not loaded" }; 
+  }
+
+  try { 
+    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, ""); 
+    const buffer = Buffer.from(base64Data, "base64");
+
+    const tempPath = path.join(os.tmpdir(), `frame_${Date.now()}.png`); 
+    fs.writeFileSync(tempPath, buffer);
+
+    const results = await detrPipeline(tempPath); 
+    fs.unlinkSync(tempPath);
+
+    const importantLabels = ["laptop", "screen", "monitor", "tv", "cell phone", "person"];
+
+    if (Array.isArray(results)) { 
+      for (const r of results) { 
+        const label = (r.label || "").toLowerCase(); 
+        if (importantLabels.some((x) => label.includes(x))) { 
+          return { isImportant: true, reason: `DETR: ${label}` }; 
+        } 
+      } 
+    }
+
+    return { isImportant: false, reason: "None" }; 
+
+  } catch (err) { 
+    console.error("DETR error:", err); 
+    return { isImportant: false, reason: "DETR failed" }; 
+  } 
+}
+
+// ---------------- SOCKETS ----------------
+io.on("connection", (socket) => { 
+  console.log("Connected:", socket.id);
+
+  // socket.on("audio_chunk", ({ meetingId, b64, mimeType }) => { 
+  //   if (!meetingId || !b64) return; 
+  //   try { 
+  //     saveChunk(meetingId, b64, mimeType); 
+  //   } catch (err) { 
+  //     console.error("saveChunk error:", err?.message || err); 
+  //   } 
+  // });
+socket.on("audio_chunk", async ({ meetingId, b64, mimeType,status }) => {
+  if (!meetingId || !b64) return;
+
+  try {
+    const file = saveChunk(meetingId, b64, mimeType);
+
+    // 🔥 LIVE TRANSCRIPTION FOR URGENT WORDS
+    const text = await transcribe(file);  // Whisper STT for this chunk
+
+    if (text && text.trim().length > 0) {
+      const words = extractUrgentAudioWords(text);
+
+      if (words.length > 0) {
+        console.log("🔥 URGENT AUDIO DETECTED:", words);
+        socket.emit("urgent_audio_detected", { meetingId, words });
+      }
+
+      // Append transcript continuously
+      const m = await Meeting.findById(meetingId);
+      if (m) {
+        m.transcript = (m.transcript || "") + " " + text;
+        await m.save();
+      }
+    }
+
+  } catch (err) {
+    console.error("audio_chunk error:", err?.message || err);
+  }
 });
 
-// ----------------- ROUTES -----------------
-app.post("/api/meetings", async (req, res) => {
-  const m = await Meeting.create({
-    title: req.body.title,
-    startedAt: new Date()
-  });
-  res.json(m);
+
+socket.on("audio_chunk", async ({ meetingId, b64, mimeType }) => {
+  if (!meetingId || !b64) return;
+
+  try {
+    const file = saveChunk(meetingId, b64, mimeType);
+
+    // 🔥 LIVE TRANSCRIPTION FOR URGENT WORDS
+    const text = await transcribe(file);  // Whisper STT for this chunk
+
+    if (text && text.trim().length > 0) {
+      const words = extractUrgentAudioWords(text);
+
+      if (words.length > 0) {
+        console.log("🔥 URGENT AUDIO DETECTED:", words);
+        socket.emit("urgent_audio_detected", { meetingId, words });
+      }
+
+      // Append transcript continuously
+      const m = await Meeting.findById(meetingId);
+      if (m) {
+        m.transcript = (m.transcript || "") + " " + text;
+        await m.save();
+      }
+    }
+
+  } catch (err) {
+    console.error("audio_chunk error:", err?.message || err);
+  }
 });
 
-// ----------------- RUN -----------------
-server.listen(5000, () =>
-  console.log("🚀 Server running at http://localhost:5000")
-);
-server.js
+  const lastProcessed = {}; 
+
+  socket.on("screen_frame", async ({ meetingId, imageBase64 }) => { 
+    try { 
+      if (!meetingId || !imageBase64) return; 
+
+      const now = Date.now(); 
+      if (lastProcessed[meetingId] && (now - lastProcessed[meetingId] < 900)) return; 
+      lastProcessed[meetingId] = now;
+
+      console.log("Received screen frame:", meetingId);
+
+      const m = await Meeting.findById(meetingId); 
+      if (!m) { 
+        console.warn("Meeting not found for frame:", meetingId); 
+        return; 
+      }
+
+      // OCR
+      // const ocrText = await runOCR(imageBase64); 
+      let ocrText = await runOCR(imageBase64);
+
+     // CLEAN the OCR output
+     ocrText = cleanOCR(ocrText);
+
+      if (ocrText) { 
+        m.ocrText = (m.ocrText || "") + (m.ocrText ? "\n" : "") + ocrText; 
+        await m.save(); 
+        socket.emit("ocr_update", { meetingId, ocrText }); 
+      }
+
+      // urgency
+      const combined = (((m.transcript || "") + "\n" + (m.ocrText || "")).trim()); 
+      const urgencyLabel = await analyzeUrgency(combined); 
+      if (urgencyLabel) { 
+        m.urgency = urgencyLabel; 
+        await m.save(); 
+        socket.emit("urgency_update", { meetingId, urgency: urgencyLabel }); 
+      }
+
+      // ----- AUTO SUMMARY AFTER EACH MANUAL CAPTURE -----
+if (GROQ_KEY) {
+  try {
+    const combinedText = ((m.transcript || "") + "\n" + (m.ocrText || "")).trim();
+
+    if (combinedText.length > 20) {
+
+      // CREATE SUMMARY
+      const res = await fetch(`${GROQ_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${GROQ_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            { role: "system", content: "Summarize meetings concisely." },
+            { role: "user", content: `Summarize:\n${combinedText}` }
+          ],
+          temperature: 0.3
+        })
+      });
+
+      const json = await res.json();
+      const summary = json?.choices?.[0]?.message?.content || "";
+
+      // CREATE KEY POINTS
+      const keyObj = await fetch(`${GROQ_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${GROQ_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            { role: "system", content: "Extract 5 bullet points." },
+            { role: "user", content: combinedText }
+          ],
+          temperature: 0.15
+        })
+      });
+
+      const keyJSON = await keyObj.json();
+      const keyPoints = (keyJSON?.choices?.[0]?.message?.content || "")
+        .split(/\n/)
+        .map(x => x.replace(/^[-*•\s]*/, "").trim())
+        .filter(Boolean)
+        .slice(0, 5);
+
+      // SAVE
+      m.summary = summary;
+      m.keyPoints = keyPoints;
+      await m.save();
+
+      // SEND LIVE UPDATE TO FRONTEND
+      socket.emit("summary_update", { summary, keyPoints });
+    }
+  } catch (err) {
+    console.error("summary_update error:", err);
+  }
+}
+
+      // detect important
+      const imp = await detectImportantImage(imageBase64, ocrText);
+
+      if (imp.isImportant) { 
+        socket.emit("important_image", { meetingId, imageBase64, reason: imp.reason }); 
+      }
+
+      console.log("🔍 important_image check:", imp);
+
+      if (imp.isImportant) { 
+        m.importantImages = m.importantImages || []; 
+        m.importantImages.unshift(imageBase64); 
+        if (m.importantImages.length > 8) m.importantImages = m.importantImages.slice(0, 8); 
+        await m.save();
+
+        console.log("📸 Emitting important_image:", imp.reason); 
+        socket.emit("important_image", { meetingId, imageBase64, reason: imp.reason }); 
+      } 
+      else { 
+        console.log("⛔ Not important:", imp.reason); 
+      }
+
+    } catch (err) { 
+      console.error("screen_frame handler error:", err?.message || err); 
+    } 
+  });
+
+  socket.on("end_meeting", async ({ meetingId }) => { 
+    try { 
+      const m = await Meeting.findById(meetingId); 
+      if (!m) return;
+
+      const exts = ["webm", "mp3", "wav", "ogg"]; 
+      let file = null;
+
+      for (const e of exts) { 
+        const f = path.join(TMP, `${meetingId}.${e}`); 
+        if (fs.existsSync(f)) { file = f; break; } 
+      }
+
+      const text = file ? await transcribe(file) : (m.transcript || ""); 
+      m.transcript = text || m.transcript || "";
+
+      // const urgentWords = extractUrgentAudioWords(m.transcript || ""); 
+      // if (urgentWords.length > 0) { 
+      //   m.urgentAudioWords = urgentWords; 
+      //   m.urgency = "High"; 
+      // }
+//       const urgentWords = extractUrgentAudioWords(m.transcript || "");
+// if (urgentWords.length > 0) {
+//     m.urgentAudioWords = urgentWords;
+//     m.urgency = "High";
+//     socket.emit("urgent_audio_detected", { meetingId, urgentWords });
+// }
+
+
+      try { 
+        m.summary = (GROQ_KEY && m.transcript) ? (await (async () => { 
+          const form = new FormData(); 
+
+          const res = await fetch(`${GROQ_URL}/chat/completions`, { 
+            method: "POST", 
+            headers: { Authorization: `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" }, 
+            body: JSON.stringify({ 
+              model: "llama-3.1-8b-instant", 
+              messages: [
+                { role: "system", content: "Summarize meetings concisely." }, 
+                { role: "user", content: `Summarize in 5 sentences:\n\n${m.transcript}` }
+              ], 
+              temperature: 0.3 
+            }) 
+          });
+
+          const j = await res.json(); 
+          return j?.choices?.[0]?.message?.content || "No summary"; 
+
+        })()) : (m.transcript ? "Summary skipped (no GROQ key)" : "No transcript");
+
+      } catch (e) { 
+        console.warn("summary failed:", e?.message || e); 
+        m.summary = m.summary || "Summary failed"; 
+      }
+
+      try { 
+        m.keyPoints = (GROQ_KEY && m.transcript) ? (await (async () => { 
+          const res = await fetch(`${GROQ_URL}/chat/completions`, { 
+            method: "POST", 
+            headers: { Authorization: `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" }, 
+            body: JSON.stringify({ 
+              model: "llama-3.1-8b-instant", 
+              messages: [
+                { role: "system", content: "Extract up to 5 key bullet points." }, 
+                { role: "user", content: `Text:\n\n${m.transcript}` }
+              ], 
+              temperature: 0.15 
+            }) 
+          });
+
+          const j = await res.json(); 
+          const raw = j?.choices?.[0]?.message?.content || ""; 
+
+          return raw
+            .split(/\r?\n/)
+            .map(l => l.replace(/^[-*•\s]*/, "").trim())
+            .filter(Boolean)
+            .slice(0, 5);
+
+        })()) : [];
+
+      } catch (e) { 
+        console.warn("keypoints failed:", e?.message || e); 
+        m.keyPoints = m.keyPoints || []; 
+      }
+
+      m.endedAt = new Date(); 
+      await m.save();
+
+      socket.emit("meeting_ended", m);
+
+    } catch (err) { 
+      console.error("end_meeting error:", err?.message || err); 
+    } 
+  });
+
+  socket.on("disconnect", () => console.log("Disconnected:", socket.id)); 
+});
+
+// REST
+app.post("/api/meetings", async (req, res) => { 
+  try { 
+    const m = await Meeting.create({ 
+      title: req.body.title || "Meeting " + new Date().toLocaleString(), 
+      startedAt: new Date(), 
+      ocrText: "", 
+      urgency: "Normal", 
+      importantImages: [], 
+    }); 
+
+    res.json(m); 
+
+  } catch (err) { 
+    console.error("create meeting error:", err?.message || err); 
+    res.status(500).json({ error: "failed to create meeting" }); 
+  } 
+});
+
+app.get("/api/meetings", async (req, res) => { 
+  try { 
+    const items = await Meeting.find().sort({ createdAt: -1 }).limit(50); 
+    res.json(items); 
+
+  } catch (err) { 
+    res.status(500).json({ error: "failed to list meetings" }); 
+  } 
+});
+
+server.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
