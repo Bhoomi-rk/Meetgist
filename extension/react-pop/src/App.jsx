@@ -1,5 +1,4 @@
 
-
 // App.jsx — patched (auto-capture + pending queue + safe start)
 import React, { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
@@ -47,22 +46,20 @@ const statusRef = useRef("idle");
     s.on("connect", () => console.log("Socket connected:", s.id));
 
     s.on("meeting_ended", (data) => {
-      console.log("meeting_ended", data);
-      setTranscript(data.transcript || "");
-      setSummary(data.summary || "No summary");
-      setKeyPoints(data.keyPoints || []);
-      setOcrText(data.ocrText || "");
-      setUrgency(data.urgency || "");
-      setImportantImages(data.importantImages || []);
-      setStatus("idle");
-      statusRef.current = "idle";
+  console.log("meeting_ended", data);
+  setTranscript(data.transcript || "");
+  setSummary(data.summary || "No summary");
 
-      stopRecordings();
-      // When meeting ends, we don't want pending captures to run
-      pendingAutoCapture.current = false;
-      setScreenReady(false);
+  // FIX HERE
+  if (data.keyPoints && data.keyPoints.length > 0) {
+    setKeyPoints(data.keyPoints);
+  }
 
-    });
+  setOcrText(data.ocrText || "");
+  setUrgency(data.urgency || "");
+  setImportantImages(data.importantImages || []);
+});
+
 
     s.on("ocr_update", (p) => {
       if (p?.ocrText) setOcrText((old) => (old ? old + "\n" + p.ocrText : p.ocrText));
@@ -70,15 +67,16 @@ const statusRef = useRef("idle");
 
     s.on("urgency_update", (p) => { if (p?.urgency) setUrgency(p.urgency); });
 
-    s.on("important_image", (p) => {
-      const img = p?.imageBase64 || p?.url;
-      if (!img) return;
-      setImportantImages((prev) => {
-        if (prev.includes(img)) return prev;
-        return [img, ...prev].slice(0, 12);
-      });
-      console.log("Received important image:", p?.reason || "no reason");
-    });
+    s.on("important_image", ({ meetingId, imageBase64, reason, words }) => {
+    console.log("📸 Important image received:", reason || "unknown");
+
+    // Save image to state
+    setImportantImages(prev => [imageBase64, ...prev]);
+
+    // (optional) show toast message
+    toast.success(`Important Image Captured (${reason})`);
+});
+
 
     s.on("summary_update", (data) => {
       if (data.summary) setSummary(data.summary);
@@ -146,14 +144,6 @@ const statusRef = useRef("idle");
         // NOW screen is ready → meeting becomes recording
        setStatus("recording");
        statusRef.current = "recording";   // ⭐ instant update
-
-
-        // If urgent trigger was waiting, run it now
-        // if (pendingAutoCapture.current) {
-        //   console.log("⚡ Running delayed urgent auto-capture now!");
-        //   pendingAutoCapture.current = false;
-        //   safeAutoCapture();
-        // }
       };
 
       try { 
@@ -291,36 +281,6 @@ const statusRef = useRef("idle");
     pendingAutoCapture.current = false;
   };
 
-  // ---------- Start Meeting ----------
-  // const startMeeting = async () => {
-  //   setError(null);
-  //   setTranscript(""); setSummary(""); setKeyPoints([]);
-  //   setOcrText(""); setUrgency(""); setImportantImages([]);
-
-  //   // create meeting in DB
-  //   try {
-  //     const res = await fetch(`${API_URL}/meetings`, {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({ title: "Meeting " + new Date().toLocaleString() })
-  //     });
-  //     const newMeeting = await res.json();
-  //     meetingRef.current = newMeeting;
-  //     setMeeting(newMeeting);
-  //   } catch (e) {
-  //     console.error("create meeting failed", e);
-  //     setError("Failed to create meeting");
-  //     return;
-  //   }
-
-  //   // start screen / mic; status becomes recording only after streams started
-  //   await startScreen();
-  //   await startMicRecorder();
-
-  //   // only mark recording once streams started (screenReady may be set by onloadeddata)
-  //   setStatus("recording");
-  //   console.log("🟢 Meeting started (status=recording)");
-  // };
   const startMeeting = async () => {
   setError(null);
   setTranscript(""); 

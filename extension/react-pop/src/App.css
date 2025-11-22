@@ -1,317 +1,171 @@
-/* Base Styles */
-:root {
-  --primary-color: #4a6cf7;
-  --danger-color: #dc3545;
-  --success-color: #28a745;
-  --warning-color: #ffc107;
-  --text-color: #333;
-  --light-bg: #f8f9fa;
-  --border-color: #dee2e6;
-  --border-radius: 8px;
-  --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+/* ====================================================
+   Global Styles — Modern Clean UI
+==================================================== */
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  line-height: 1.6;
-  color: var(--text-color);
-  background-color: #f5f7ff;
+  margin: 0;
+  padding: 0;
+  background: #eef1f8;
+  font-family: 'Inter', sans-serif;
+  color: #1f2937;
 }
 
-/* App Layout */
+/* App container */
 .app {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
+  max-width: 1150px;
+  margin: auto;
+  padding: 24px;
 }
+
+/* ====================================================
+   Header
+==================================================== */
 
 .app-header {
-  background-color: white;
-  padding: 1rem 2rem;
-  box-shadow: var(--box-shadow);
+  background: #ffffff;
+  padding: 20px 28px;
+  border-radius: 16px;
+  margin-bottom: 28px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
 }
 
 .app-header h1 {
-  font-size: 1.5rem;
-  color: var(--primary-color);
   margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  background: linear-gradient(90deg, #4f46e5, #6366f1);
+  -webkit-background-clip: text;
+  color: transparent;
 }
 
-.app-content {
-  flex: 1;
-  padding: 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
-  width: 100%;
-}
+/* ====================================================
+   Buttons
+==================================================== */
 
-/* Buttons */
-.btn {
-  padding: 0.5rem 1rem;
+button {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #fff;
   border: none;
-  border-radius: var(--border-radius);
-  font-size: 1rem;
+  padding: 12px 20px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.3s ease;
+  font-size: 15px;
+  font-weight: 500;
+  transition: 0.2s ease-in-out;
 }
 
-.btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
+button:hover {
+  background: linear-gradient(135deg, #4338ca, #4f46e5);
+  transform: translateY(-2px);
 }
 
-.btn-primary {
-  background-color: var(--primary-color);
-  color: white;
+button:active {
+  transform: scale(0.97);
 }
 
-.btn-primary:hover:not(:disabled) {
-  background-color: #3a5bd9;
-  transform: translateY(-1px);
+/* ====================================================
+   Data Box Cards
+==================================================== */
+
+.box {
+  background: #ffffff;
+  padding: 22px;
+  border-radius: 16px;
+  margin-bottom: 26px;
+
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
+  animation: fadeIn 0.3s ease;
 }
 
-.btn-danger {
-  background-color: var(--danger-color);
-  color: white;
+.box h3 {
+  margin-top: 0;
+  margin-bottom: 14px;
+  font-weight: 600;
+  font-size: 20px;
+  color: #111827;
 }
 
-.btn-danger:hover:not(:disabled) {
-  background-color: #c82333;
-  transform: translateY(-1px);
-}
+/* ====================================================
+   Text / Transcript Areas
+==================================================== */
 
-.btn-text {
-  background: none;
-  color: var(--primary-color);
-  text-decoration: underline;
-  padding: 0.25rem 0.5rem;
-}
-
-/* Meeting Container */
-.meeting-container {
-  background: white;
-  border-radius: var(--border-radius);
-  box-shadow: var(--box-shadow);
-  overflow: hidden;
-  margin-bottom: 2rem;
-}
-
-.meeting-header {
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.meeting-header h2 {
-  margin: 0 0 0.5rem;
-  color: var(--text-color);
-}
-
-.meeting-meta {
-  display: flex;
-  gap: 1rem;
-  font-size: 0.9rem;
-  color: #6c757d;
-  flex-wrap: wrap;
-}
-
-/* Meeting Content */
-.meeting-content {
-  display: flex;
-  gap: 2rem;
-  padding: 1.5rem;
-}
-
-.transcript-container,
-.summary-preview {
-  flex: 1;
-  background: white;
-  border-radius: var(--border-radius);
-  padding: 1.5rem;
-  box-shadow: var(--box-shadow);
-  display: flex;
-  flex-direction: column;
-}
-
-.transcript-container h3,
-.summary-preview h3 {
-  color: var(--primary-color);
-  margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.transcript-content {
-  background: var(--light-bg);
-  padding: 1rem;
-  border-radius: var(--border-radius);
-  flex: 1;
+pre {
+  background: #f3f4f6;
+  padding: 16px;
+  border-radius: 12px;
+  max-height: 330px;
   overflow-y: auto;
   white-space: pre-wrap;
-  min-height: 200px;
-  max-height: 400px;
+  line-height: 1.55;
+  font-size: 14.5px;
+  border: 1px solid #e5e7eb;
 }
 
-.summary-content {
-  flex: 1;
-  overflow-y: auto;
+/* ====================================================
+   Important Image Grid
+==================================================== */
+
+.box img {
+  border-radius: 14px;
+  margin-right: 10px;
+  margin-bottom: 12px;
+  width: 180px;
+  height: auto;
+
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s ease;
 }
 
-.summary-content p {
-  margin-bottom: 1rem;
-  line-height: 1.6;
+.box img:hover {
+  transform: scale(1.04);
 }
 
-.key-points {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border-color);
+/* ====================================================
+   Error UI
+==================================================== */
+
+.error {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 16px;
+  border-radius: 12px;
+  margin-top: 24px;
+  border-left: 6px solid #ef4444;
+  font-weight: 500;
+  box-shadow: 0 2px 10px rgba(255, 0, 0, 0.1);
 }
 
-.key-points h4 {
-  margin-bottom: 0.75rem;
-  color: var(--text-color);
-}
+/* ====================================================
+   Scrollbar Styling
+==================================================== */
 
-.key-points ul {
-  padding-left: 1.25rem;
-}
-
-.key-points li {
-  margin-bottom: 0.5rem;
-  line-height: 1.5;
-  position: relative;
-}
-
-.key-points li::before {
-  content: '•';
-  color: var(--primary-color);
-  font-weight: bold;
-  display: inline-block;
-  width: 1em;
-  margin-left: -1em;
-}
-
-/* Status Badges */
-.status-badge {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border-radius: 50px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: capitalize;
-}
-
-.status-idle {
-  background-color: #e2e3e5;
-  color: #383d41;
-}
-
-.status-in_progress {
-  background-color: #cce5ff;
-  color: #004085;
-}
-
-.status-completed {
-  background-color: #d4edda;
-  color: #155724;
-}
-
-.status-ending {
-  background-color: #fff3cd;
-  color: #856404;
-}
-
-/* No Meeting State */
-.no-meeting {
-  text-align: center;
-  padding: 3rem 1rem;
-  background: white;
-  border-radius: var(--border-radius);
-  box-shadow: var(--box-shadow);
-}
-
-.no-meeting h2 {
-  margin-bottom: 1rem;
-  color: var(--text-color);
-}
-
-/* Error Message */
-.error-message {
-  background: #f8d7da;
-  color: #721c24;
-  padding: 1rem;
-  border-radius: var(--border-radius);
-  margin-top: 1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-/* Responsive Design */
-@media (max-width: 768px) {
-  .app-header {
-    flex-direction: column;
-    gap: 1rem;
-    text-align: center;
-  }
-
-  .app-content {
-    padding: 1rem;
-  }
-
-  .meeting-content {
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
-  .transcript-container,
-  .summary-preview {
-    width: 100%;
-  }
-}
-
-/* Animations */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.meeting-container {
-  animation: fadeIn 0.3s ease-out;
-}
-
-/* Scrollbar Styling */
 ::-webkit-scrollbar {
   width: 8px;
-  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: #f3f4f6;
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: #c3c7cf;
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: #a6abb8;
+}
+
+/* ====================================================
+   Animation
+==================================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
