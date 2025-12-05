@@ -337,7 +337,8 @@ statusRef.current = "idle";
           <video ref={videoRef} autoPlay playsInline muted style={{ display: "none" }} />
 
           <main>
-            {meeting && <h2>{meeting.title}</h2>}
+            {meeting && <h2>{meeting?.title || "No active meeting"}</h2>
+}
 
             <section className="box"><h3>Transcript</h3><pre>{transcript || "Will appear after end..."}</pre></section>
             <section className="box"><h3>Summary</h3><p>{summary || "..."}</p></section>

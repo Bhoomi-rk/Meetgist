@@ -35,12 +35,19 @@ export default function MeetingDetails() {
       <h3>Key Points</h3>
       <ul>{meeting.keyPoints?.map((x,i)=><li key={i}>{x}</li>)}</ul>
 
-      <h3>Important Images</h3>
-      <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-        {meeting.images?.map((img,i)=>(
-          <img key={i} src={img} width="200" style={{borderRadius:"8px"}}/>
+      <section className="box">
+        <h3>Important Images</h3>
+          {meeting?.importantImages?.length > 0 ? (
+        <div style={{display:"flex",flexWrap:"wrap",gap:"10px"}}>
+           {meeting.importantImages.map((img,i)=>(
+          <img key={i} src={img} alt="important" style={{width:"200px",borderRadius:"8px"}} />
         ))}
-      </div>
+    </div>
+     ) : (
+    <p>No important images captured.</p>
+  )}
+</section>
+
 
       <button onClick={deleteMeeting} style={{
         background:"red",color:"white",padding:"10px",marginTop:"20px"

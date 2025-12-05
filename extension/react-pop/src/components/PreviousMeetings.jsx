@@ -3,6 +3,21 @@ import { Link } from "react-router-dom";
 
 const API_URL = "http://localhost:5000/api";
 
+const deleteAll = async () => {
+  try {
+    const res = await fetch(`${API_URL}/meetings/delete/all`, {
+      method: "DELETE"
+    });
+    const data = await res.json();
+    alert(data.message);
+    setMeetings([]); // instantly update UI
+  } catch {
+    alert("Backend not running. Start server first.");
+  }
+};
+
+
+
 export default function PreviousMeetings() {
   const [meetings, setMeetings] = useState([]);
 
@@ -16,16 +31,14 @@ export default function PreviousMeetings() {
   return (
     <div style={{padding:"20px"}}>
       <h2>Previous Meetings</h2>
-       {/* <button 
+       <button 
    onClick={async ()=>{
-      await fetch("http://localhost:5000/api/meetings/clear",{method:"DELETE"});
-      alert("All history deleted");
-      window.location.reload();
+      await deleteAll();
    }}
    style={{background:"red",color:"white",padding:"6px 12px",marginBottom:"10px"}}
 >
    Delete All History
-</button> */}
+</button>
 
       {meetings.length === 0 && <p>No meetings recorded yet...</p>}
 
