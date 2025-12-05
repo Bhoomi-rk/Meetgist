@@ -3,6 +3,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
+import { Link } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
+import PreviousMeetings from "./components/PreviousMeetings";
+import MeetingDetails from "./components/MeetingDetails";
+
+
 
 const API_URL = "http://localhost:5000/api";
 let mediaRecorder = null;      // mic recorder
@@ -45,20 +51,6 @@ const statusRef = useRef("idle");
 
     s.on("connect", () => console.log("Socket connected:", s.id));
 
-    s.on("meeting_ended", (data) => {
-  console.log("meeting_ended", data);
-  setTranscript(data.transcript || "");
-  setSummary(data.summary || "No summary");
-
-  // FIX HERE
-  if (data.keyPoints && data.keyPoints.length > 0) {
-    setKeyPoints(data.keyPoints);
-  }
-
-  setOcrText(data.ocrText || "");
-  setUrgency(data.urgency || "");
-  setImportantImages(data.importantImages || []);
-});
 
 
     s.on("ocr_update", (p) => {
@@ -73,8 +65,7 @@ const statusRef = useRef("idle");
     // Save image to state
     setImportantImages(prev => [imageBase64, ...prev]);
 
-    // (optional) show toast message
-    toast.success(`Important Image Captured (${reason})`);
+   
 });
 
 
@@ -317,41 +308,61 @@ statusRef.current = "idle";
 
   // ---------- Render ----------
   return (
-    <div className="app">
-      <header className="app-header">
-        <h1>Meeting Assistant</h1>
-        {status === "idle" && <button onClick={startMeeting}>Start Meeting</button>}
-        {status === "recording" && <>
-          {/* <button onClick={captureNow} style={{ marginRight: 8 }}>Capture Frame</button> */}
-          <button onClick={endMeeting}>End Meeting</button>
-        </>}
-        {status === "completed" && <button onClick={() => { setStatus("idle"); setMeeting(null); meetingRef.current = null; }}>Reset</button>}
-      </header>
+  <div className="app">
+    <Routes>
 
-      {/* hidden video used for capturing frames */}
-      <video ref={videoRef} autoPlay playsInline muted style={{ display: "none" }} />
+      {/* HOME PAGE */}
+      <Route path="/" element={
+        <>
+          <header className="app-header">
+            <h1>Meeting Assistant</h1>
 
-      <main>
-        {meeting && <h2>{meeting.title}</h2>}
+            {status === "idle" && <button onClick={startMeeting}>Start Meeting</button>}
+            {status === "recording" && <button onClick={endMeeting}>End Meeting</button>}
+            {status === "completed" && 
+              <button onClick={() => { setStatus("idle"); setMeeting(null); meetingRef.current = null; }}>
+                Reset
+              </button>
+            }
+          </header>
 
-        <section className="box"><h3>Transcript</h3><pre>{transcript || "Will appear after end..."}</pre></section>
-        <section className="box"><h3>Summary</h3><p>{summary || "..."}</p></section>
-        <section className="box"><h3>Key Points</h3><ul>{keyPoints.map((k,i)=><li key={i}>{k}</li>)}</ul></section>
+          <div>
+            <button>
+              <Link to="/previous" style={{textDecoration:"none", color:"white"}}>
+                Previous Meetings
+              </Link>
+            </button>
+          </div>
 
-        <section className="box"><h3>OCR Text</h3><pre style={{whiteSpace:"pre-wrap"}}>{ocrText || "Extracting on-screen text..."}</pre></section>
+          <video ref={videoRef} autoPlay playsInline muted style={{ display: "none" }} />
 
-        <section className="box"><h3>Urgency</h3><p style={{color: urgency?.toLowerCase?.().includes("high") ? "red" : "black"}}>{urgency || "Detecting urgency..."}</p></section>
+          <main>
+            {meeting && <h2>{meeting.title}</h2>}
 
-        <section className="box">
-          <h3>Important Images</h3>
-          {importantImages.length > 0 ? <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
-            {importantImages.map((img,i)=>(<img key={i} src={img} alt={`imp-${i}`} style={{width:180,borderRadius:8}} />))}
-          </div> : "No important images yet... (press Capture Frame or speak urgent words)"}
-        </section>
+            <section className="box"><h3>Transcript</h3><pre>{transcript || "Will appear after end..."}</pre></section>
+            <section className="box"><h3>Summary</h3><p>{summary || "..."}</p></section>
+            <section className="box"><h3>Key Points</h3><ul>{keyPoints.map((k,i)=><li key={i}>{k}</li>)}</ul></section>
+            <section className="box"><h3>OCR Text</h3><pre>{ocrText || "Extracting on-screen text..."}</pre></section>
+            <section className="box"><h3>Urgency</h3><p style={{color: urgency?.toLowerCase().includes("high") ? "red" : "black"}}>{urgency || "Detecting..."}</p></section>
+            <section className="box">
+              <h3>Important Images</h3>
+              {importantImages.length > 0 
+                ? <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
+                    {importantImages.map((img,i)=>(<img key={i} src={img} style={{width:180,borderRadius:8}} />))}
+                  </div>
+                : "No important images yet..."}
+            </section>
 
-        {error && <div className="error">{error}</div>}
-      </main>
-    </div>
-  );
+            {error && <div className="error">{error}</div>}
+          </main>
+        </>
+      } />
+
+      {/* OTHER PAGES (No header/UI here) */}
+      <Route path="/previous" element={<PreviousMeetings />} />
+      <Route path="/meeting/:id" element={<MeetingDetails />} />
+
+    </Routes>
+  </div>
+);
 }
-

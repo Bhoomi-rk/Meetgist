@@ -386,92 +386,73 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("end_meeting", async ({ meetingId }) => {
-    try {
-      const m = await Meeting.findById(meetingId);
-      if (!m) return;
+socket.on("end_meeting", async ({ meetingId }) => {
+  try {
+    const m = await Meeting.findById(meetingId);
+    if (!m) return;
 
-      const exts = ["webm", "mp3", "wav", "ogg"];
-      let file = null;
+    // Final transcript update from last recorded audio file
+    const exts = ["webm", "mp3", "wav", "ogg"];
+    let file = null;
 
-      for (const e of exts) {
-        const f = path.join(TMP, `${meetingId}.${e}`);
-        if (fs.existsSync(f)) { file = f; break; }
-      }
-
-      const text = file ? await transcribe(file) : (m.transcript || "");
-      m.transcript = text || m.transcript || "";
-
-      try {
-        m.summary = (GROQ_KEY && m.transcript) ? (await (async () => {
-          const form = new FormData();
-
-          const res = await fetch(`${GROQ_URL}/chat/completions`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "llama-3.1-8b-instant",
-              messages: [
-                { role: "system", content: "Summarize meetings concisely." },
-                { role: "user", content: `Summarize in 5 sentences:\n\n${m.transcript}` }
-              ],
-              temperature: 0.3
-            })
-          });
-
-          const j = await res.json();
-          return j?.choices?.[0]?.message?.content || "No summary";
-
-        })()) : (m.transcript ? "Summary skipped (no GROQ key)" : "No transcript");
-
-      } catch (e) {
-        console.warn("summary failed:", e?.message || e);
-        m.summary = m.summary || "Summary failed";
-      }
-
-      try {
-        m.keyPoints = (GROQ_KEY && m.transcript) ? (await (async () => {
-          const res = await fetch(`${GROQ_URL}/chat/completions`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "llama-3.1-8b-instant",
-              messages: [
-                { role: "system", content: "Extract up to 5 key bullet points." },
-                { role: "user", content: `Text:\n\n${m.transcript}` }
-              ],
-              temperature: 0.15
-            })
-          });
-
-          const j = await res.json();
-          const raw = j?.choices?.[0]?.message?.content || "";
-
-          return raw
-            .split(/\r?\n/)
-            .map(l => l.replace(/^[-*•\s]*/, "").trim())
-            .filter(Boolean)
-            .slice(0, 5);
-
-        })()) : [];
-
-      } catch (e) {
-        console.warn("keypoints failed:", e?.message || e);
-        m.keyPoints = m.keyPoints || [];
-      }
-
-      m.endedAt = new Date();
-      await m.save();
-
-      socket.emit("meeting_ended", m);
-    } catch (err) {
-      console.error("end_meeting error:", err?.message || err);
+    for (const e of exts) {
+      const f = path.join(TMP, `${meetingId}.${e}`);
+      if (fs.existsSync(f)) { file = f; break; }
     }
-  });
 
-  socket.on("disconnect", () => console.log("Disconnected:", socket.id));
+    const finalText = file ? await transcribe(file) : m.transcript;
+    m.transcript = (m.transcript || "") + " " + (finalText || "");
+
+    // Generate Final Summary
+    if (GROQ_KEY && m.transcript?.length > 10) {
+      const summaryRes = await fetch(`${GROQ_URL}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
+        body: JSON.stringify({
+          model:"llama-3.1-8b-instant",
+          messages:[
+            { role:"system", content:"Summarize concisely." },
+            { role:"user", content:`Summarize meeting:\n${m.transcript}` }
+          ]
+        })
+      });
+      const js = await summaryRes.json();
+      m.summary = js?.choices?.[0]?.message?.content || "No summary";
+    }
+
+    // Generate Key Points
+    if (GROQ_KEY && m.transcript?.length > 10) {
+      const keysRes = await fetch(`${GROQ_URL}/chat/completions`,{
+        method:"POST",
+        headers:{ Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
+        body:JSON.stringify({
+          model:"llama-3.1-8b-instant",
+          messages:[
+            { role:"system", content:"Extract 5 key bullet points" },
+            { role:"user", content:m.transcript }
+          ]
+        })
+      });
+      const json = await keysRes.json();
+      m.keyPoints = (json?.choices?.[0]?.message?.content || "")
+        .split("\n")
+        .map(v=>v.replace(/^[-*•\s]*/,"").trim())
+        .filter(Boolean)
+        .slice(0,5);
+    }
+
+    m.endedAt = new Date();
+    await m.save();
+
+    socket.emit("meeting_ended", m);
+    console.log("✔ Meeting saved successfully");
+
+  } catch(e){
+    console.log("end_meeting error",e);
+  }
 });
 
+});
 // REST
 app.post("/api/meetings", async (req, res) => {
   try {
@@ -489,6 +470,37 @@ app.post("/api/meetings", async (req, res) => {
     res.status(500).json({ error: "failed to create meeting" });
   }
 });
+// GET all meetings
+app.get("/api/meetings", async (req,res)=>{
+  const data = await Meeting.find({}, "title createdAt summary")
+                            .sort({createdAt:-1});
+  res.json(data);
+});
+
+
+// GET single meeting
+app.get("/api/meetings/:id", async (req,res)=>{
+  const meeting = await Meeting.findById(req.params.id);
+  res.json(meeting);
+});
+
+// DELETE meeting
+app.delete("/api/meetings/:id", async (req,res)=>{
+  await Meeting.findByIdAndDelete(req.params.id);
+  res.json({message:"deleted"});
+});
+
+// DELETE all meetings
+// app.delete("/api/meetings/clear", async (req,res)=>{
+//    try {
+//     const result = await Meeting.deleteMany({});
+//     res.json({ message: "All meetings deleted", deletedCount: result.deletedCount || 0 });
+//   } catch (err) {
+//     console.error("clear meetings error:", err?.message || err);
+//     res.status(500).json({ error: "failed to delete meetings" });
+// +  }
+// });
+
 
 app.get("/api/meetings", async (req, res) => {
   try {
