@@ -316,7 +316,7 @@ statusRef.current = "idle";
         <>
           <header className="app-header">
             <h1>Meeting Assistant</h1>
-
+            <div>
             {status === "idle" && <button onClick={startMeeting}>Start Meeting</button>}
             {status === "recording" && <button onClick={endMeeting}>End Meeting</button>}
             {status === "completed" && 
@@ -324,6 +324,7 @@ statusRef.current = "idle";
                 Reset
               </button>
             }
+            </div>
           </header>
 
           <div>

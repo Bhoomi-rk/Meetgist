@@ -24,8 +24,11 @@ const io = socketIo(server, {
   cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] },
 });
 
-app.use(cors());
-app.use(express.json({ limit: "50mb" }));
+app.use(cors({
+  origin: "http://localhost:5173",
+  methods: ["GET","POST","DELETE"]
+}));
+app.use(express.json());
 
 // MongoDB (fallback to local)
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/meetgist";
@@ -35,18 +38,28 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err?.message || err));
 
-const Meeting = mongoose.model("Meeting", {
-  title: String,
-  startedAt: Date,
+// Optional safety: disable optimistic concurrency globally (reduces VersionErrors further)
+
+
+// -------------------------
+// Meeting Schema (FIXED)
+// -------------------------
+// Important: versionKey: false must be inside the same options object as timestamps.
+const Meeting = mongoose.model("Meeting", new mongoose.Schema({
+  title: { type: String, required: true },
+  startedAt: { type: Date, default: Date.now },
   endedAt: Date,
-  transcript: String,
+  transcript: String,      // keeping as String (you chose option A)
   summary: String,
   keyPoints: [String],
-  ocrText: String,
-  urgency: String,
+  ocrText: String,         // keeping as String
+  urgency: { type: String, default: "Normal" },
   urgentAudioWords: [String],
-  importantImages: [String], // store base64 frames (trimmed)
-});
+  importantImages: [String],
+}, { 
+  timestamps: true,
+  versionKey: false          // <-- FIXED (now honored)
+}));
 
 // tmp audio directory
 const TMP = path.join(__dirname, "tmp_audio");
@@ -101,9 +114,7 @@ function extractUrgentAudioWords(text) {
   if (!text) return [];
 
   const urgentKeywords = [
-    "urgent", "important", "submit", "deadline", "asap",
-    "immediately", "must", "tonight", "slide",
-    "priority", "emergency", "critical"
+     "important","note this","slide","important point","remember","pay attention","graph","chart"
   ];
 
   const found = [];
@@ -144,7 +155,6 @@ async function transcribe(filePath) {
   }
 }
 
-//
 function cleanOCR(text) {
   if (!text) return "";
 
@@ -170,7 +180,6 @@ function cleanOCR(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
-
 
 // ---------------- OCR ----------------
 async function runOCR(imageBase64) {
@@ -216,16 +225,30 @@ async function analyzeUrgency(combinedText) {
 // ---------------- Important image detection ----------------
 // (left commented as you had it; keep if you want OCR+DETR-based detection later)
 // async function detectImportantImage(imageBase64, ocrText) { ... }
+// prevent duplicate image spam
+// Prevent repeated importantImages saving spam
+const lastImageSave = {};
 
 // ---------------- SOCKETS ----------------
 io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
+
+  // ---- STT throttling per socket to reduce Groq rate-limit errors ----
+  let lastSTT = 0;
+  const STT_GAP = 500; // ms between transcribe calls
 
   socket.on("audio_chunk", async ({ meetingId, b64, mimeType, status }) => {
     if (!meetingId || !b64) return;
 
     try {
       const file = saveChunk(meetingId, b64, mimeType);
+
+      // Throttle STT calls to avoid rate limit
+      if (Date.now() - lastSTT < STT_GAP) {
+        // Still attempt minimal transcript append locally by skipping STT call
+        return;
+      }
+      lastSTT = Date.now();
 
       // 🔥 LIVE TRANSCRIPTION FOR URGENT WORDS
       const text = await transcribe(file); // Whisper STT for this chunk
@@ -237,38 +260,57 @@ io.on("connection", (socket) => {
           console.log("🔥 URGENT AUDIO DETECTED:", words);
           socket.emit("urgent_audio_detected", { meetingId, words });
 
-          // --- NEW: when urgent audio detected, save the latest screen frame as important ---
+          // --- when urgent audio detected, save the latest screen frame as important ---
           try {
             const frame = lastScreenFrame[meetingId];
             if (frame) {
-              const m = await Meeting.findById(meetingId);
-              if (m) {
-                m.importantImages = m.importantImages || [];
-                m.importantImages.unshift(frame);
-                if (m.importantImages.length > 8) m.importantImages = m.importantImages.slice(0, 8);
-                // optionally record which audio words triggered it
-                m.urgentAudioWords = Array.from(new Set([...(m.urgentAudioWords || []), ...words]));
-                m.urgency = "High";
-                await m.save();
-              }
+              // Use atomic updates (no .save()) to avoid VersionError
+             // ========== FIX 3: Prevent duplicate image spam ==========
+            const now = Date.now();
 
-              socket.emit("important_image", {
-                meetingId,
-                imageBase64: frame,
-                reason: "urgent_audio_detected",
-                words
-              });
+          if (!lastImageSave[meetingId] || now - lastImageSave[meetingId] > 8000) {
+
+           await Meeting.findByIdAndUpdate(
+              meetingId,
+           {
+            $addToSet: { importantImages: frame },  // prevents duplicates
+           $addToSet: { urgentAudioWords: { $each: words } },
+           urgency: "High"
+         },
+        { new: true, upsert: true }
+      );
+
+     lastImageSave[meetingId] = now;
+
+  socket.emit("important_image", {
+    meetingId,
+    imageBase64: frame,
+    reason: "urgent_audio_detected",
+    words
+  });
+}
+
+
+          
             }
           } catch (e) {
             console.error("saving frame on urgent audio failed:", e);
           }
         }
 
-        // Append transcript continuously
-        const m = await Meeting.findById(meetingId);
-        if (m) {
-          m.transcript = (m.transcript || "") + " " + text;
-          await m.save();
+        // Append transcript continuously (compute new transcript safely and update using findByIdAndUpdate)
+        try {
+          const m = await Meeting.findById(meetingId);
+          if (m) {
+            const newTranscript = ((m.transcript || "").trim() + " " + text).trim();
+            await Meeting.findByIdAndUpdate(
+              meetingId,
+              { transcript: newTranscript },
+              { new: true, upsert: true }
+            );
+          }
+        } catch (err) {
+          console.error("transcript append error:", err?.message || err);
         }
       }
     } catch (err) {
@@ -304,24 +346,42 @@ io.on("connection", (socket) => {
       ocrText = cleanOCR(ocrText);
 
       if (ocrText) {
-        m.ocrText = (m.ocrText || "") + (m.ocrText ? "\n" : "") + ocrText;
-        await m.save();
-        socket.emit("ocr_update", { meetingId, ocrText });
+        // compute new ocrText string and update atomically
+        const newOcr = ((m.ocrText || "").trim() + (m.ocrText ? "\n" : "") + ocrText).trim();
+        try {
+          await Meeting.findByIdAndUpdate(
+            meetingId,
+            { ocrText: newOcr },
+            { new: true, upsert: true }
+          );
+          socket.emit("ocr_update", { meetingId, ocrText });
+        } catch (e) {
+          console.error("ocr update failed:", e);
+        }
       }
 
-      // urgency
-      const combined = (((m.transcript || "") + "\n" + (m.ocrText || "")).trim());
-      const urgencyLabel = await analyzeUrgency(combined);
-      if (urgencyLabel) {
-        m.urgency = urgencyLabel;
-        await m.save();
-        socket.emit("urgency_update", { meetingId, urgency: urgencyLabel });
+      // urgency: analyze combined transcript + ocrText (read latest from DB)
+      try {
+        const fresh = await Meeting.findById(meetingId);
+        const combined = (((fresh?.transcript || "") + "\n" + (fresh?.ocrText || "")).trim());
+        const urgencyLabel = await analyzeUrgency(combined);
+        if (urgencyLabel) {
+          await Meeting.findByIdAndUpdate(
+            meetingId,
+            { urgency: urgencyLabel },
+            { new: true }
+          );
+          socket.emit("urgency_update", { meetingId, urgency: urgencyLabel });
+        }
+      } catch (e) {
+        console.error("urgency update failed:", e);
       }
 
       // ----- AUTO SUMMARY AFTER EACH MANUAL CAPTURE -----
       if (GROQ_KEY) {
         try {
-          const combinedText = ((m.transcript || "") + "\n" + (m.ocrText || "")).trim();
+          const fresh = await Meeting.findById(meetingId);
+          const combinedText = ((fresh?.transcript || "") + "\n" + (fresh?.ocrText || "")).trim();
 
           if (combinedText.length > 20) {
 
@@ -369,10 +429,12 @@ io.on("connection", (socket) => {
               .filter(Boolean)
               .slice(0, 5);
 
-            // SAVE
-            m.summary = summary;
-            m.keyPoints = keyPoints;
-            await m.save();
+            // SAVE (atomic update)
+            await Meeting.findByIdAndUpdate(
+              meetingId,
+              { summary, keyPoints },
+              { new: true, upsert: true }
+            );
 
             // SEND LIVE UPDATE TO FRONTEND
             socket.emit("summary_update", { summary, keyPoints });
@@ -386,73 +448,94 @@ io.on("connection", (socket) => {
     }
   });
 
-socket.on("end_meeting", async ({ meetingId }) => {
-  try {
-    const m = await Meeting.findById(meetingId);
-    if (!m) return;
+  socket.on("end_meeting", async ({ meetingId }) => {
+    try {
+      const m = await Meeting.findById(meetingId);
+      if (!m) return;
 
-    // Final transcript update from last recorded audio file
-    const exts = ["webm", "mp3", "wav", "ogg"];
-    let file = null;
+      // Final transcript update from last recorded audio file
+      const exts = ["webm", "mp3", "wav", "ogg"];
+      let file = null;
 
-    for (const e of exts) {
-      const f = path.join(TMP, `${meetingId}.${e}`);
-      if (fs.existsSync(f)) { file = f; break; }
+      for (const e of exts) {
+        const f = path.join(TMP, `${meetingId}.${e}`);
+        if (fs.existsSync(f)) { file = f; break; }
+      }
+
+      const finalText = file ? await transcribe(file) : m.transcript;
+      const newTranscript = ((m.transcript || "").trim() + " " + (finalText || "")).trim();
+
+      // Prepare fields to update
+      const updatePayload = { transcript: newTranscript, endedAt: new Date() };
+
+      // Generate Final Summary
+      if (GROQ_KEY && newTranscript?.length > 10) {
+        try {
+          const summaryRes = await fetch(`${GROQ_URL}/chat/completions`, {
+            method: "POST",
+            headers: { Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
+            body: JSON.stringify({
+              model:"llama-3.1-8b-instant",
+              messages:[
+                { role:"system", content:"Summarize concisely." },
+                { role:"user", content:`Summarize meeting:\n${newTranscript}` }
+              ]
+            })
+          });
+          const js = await summaryRes.json();
+          updatePayload.summary = js?.choices?.[0]?.message?.content || "No summary";
+        } catch (e) {
+          console.error("final summary error:", e);
+        }
+      }
+
+      // Generate Key Points
+      if (GROQ_KEY && newTranscript?.length > 10) {
+        try {
+          const keysRes = await fetch(`${GROQ_URL}/chat/completions`,{
+            method:"POST",
+            headers:{ Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
+            body:JSON.stringify({
+              model:"llama-3.1-8b-instant",
+              messages:[
+                { role:"system", content:"Extract 5 key bullet points" },
+                { role:"user", content:newTranscript }
+              ]
+            })
+          });
+          const json = await keysRes.json();
+          updatePayload.keyPoints = (json?.choices?.[0]?.message?.content || "")
+            .split("\n")
+            .map(v=>v.replace(/^[-*•\s]*/,"").trim())
+            .filter(Boolean)
+            .slice(0,5);
+        } catch (e) {
+          console.error("final keypoints error:", e);
+        }
+      }
+
+      // Atomic update to save final fields
+      const saved = await Meeting.findByIdAndUpdate(
+        meetingId,
+        updatePayload,
+        { new: true, upsert: true }
+      );
+
+      socket.emit("meeting_ended", saved);
+      console.log("✔ Meeting saved successfully");
+
+    } catch(e){
+      console.log("end_meeting error",e);
     }
+  });
 
-    const finalText = file ? await transcribe(file) : m.transcript;
-    m.transcript = (m.transcript || "") + " " + (finalText || "");
+  socket.on("disconnect", () => {
+    console.log("Disconnected:", socket.id);
+  });
 
-    // Generate Final Summary
-    if (GROQ_KEY && m.transcript?.length > 10) {
-      const summaryRes = await fetch(`${GROQ_URL}/chat/completions`, {
-        method: "POST",
-        headers: { Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
-        body: JSON.stringify({
-          model:"llama-3.1-8b-instant",
-          messages:[
-            { role:"system", content:"Summarize concisely." },
-            { role:"user", content:`Summarize meeting:\n${m.transcript}` }
-          ]
-        })
-      });
-      const js = await summaryRes.json();
-      m.summary = js?.choices?.[0]?.message?.content || "No summary";
-    }
-
-    // Generate Key Points
-    if (GROQ_KEY && m.transcript?.length > 10) {
-      const keysRes = await fetch(`${GROQ_URL}/chat/completions`,{
-        method:"POST",
-        headers:{ Authorization:`Bearer ${GROQ_KEY}`,"Content-Type":"application/json" },
-        body:JSON.stringify({
-          model:"llama-3.1-8b-instant",
-          messages:[
-            { role:"system", content:"Extract 5 key bullet points" },
-            { role:"user", content:m.transcript }
-          ]
-        })
-      });
-      const json = await keysRes.json();
-      m.keyPoints = (json?.choices?.[0]?.message?.content || "")
-        .split("\n")
-        .map(v=>v.replace(/^[-*•\s]*/,"").trim())
-        .filter(Boolean)
-        .slice(0,5);
-    }
-
-    m.endedAt = new Date();
-    await m.save();
-
-    socket.emit("meeting_ended", m);
-    console.log("✔ Meeting saved successfully");
-
-  } catch(e){
-    console.log("end_meeting error",e);
-  }
 });
+ // end io.on
 
-});
 // REST
 app.post("/api/meetings", async (req, res) => {
   try {
@@ -471,12 +554,15 @@ app.post("/api/meetings", async (req, res) => {
   }
 });
 // GET all meetings
-app.get("/api/meetings", async (req,res)=>{
-  const data = await Meeting.find({}, "title createdAt summary")
-                            .sort({createdAt:-1});
-  res.json(data);
-});
 
+app.get("/api/meetings", async (req, res) => {
+  try {
+    const items = await Meeting.find().sort({ createdAt: -1 }).limit(50);
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: "failed to list meetings" });
+  }
+});
 
 // GET single meeting
 app.get("/api/meetings/:id", async (req,res)=>{
@@ -491,23 +577,16 @@ app.delete("/api/meetings/:id", async (req,res)=>{
 });
 
 // DELETE all meetings
-// app.delete("/api/meetings/clear", async (req,res)=>{
-//    try {
-//     const result = await Meeting.deleteMany({});
-//     res.json({ message: "All meetings deleted", deletedCount: result.deletedCount || 0 });
-//   } catch (err) {
-//     console.error("clear meetings error:", err?.message || err);
-//     res.status(500).json({ error: "failed to delete meetings" });
-// +  }
-// });
-
-
-app.get("/api/meetings", async (req, res) => {
+app.delete("/api/meetings/delete/all", async (req, res) => {
   try {
-    const items = await Meeting.find().sort({ createdAt: -1 }).limit(50);
-    res.json(items);
+    const result = await Meeting.deleteMany({});
+    return res.json({
+      success: true,
+      deleted: result.deletedCount,
+      message: "All meetings deleted successfully"
+    });
   } catch (err) {
-    res.status(500).json({ error: "failed to list meetings" });
+    return res.status(500).json({ error: "Failed to delete" });
   }
 });
 
