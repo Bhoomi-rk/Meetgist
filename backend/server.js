@@ -268,7 +268,7 @@ async function analyzeUrgency(combinedText) {
 const activeTranscription = {};
 const lastImageSave = {};
 const lastVisualCapture = {};
-const VISUAL_CAPTURE_GAP = 15000; // 15 seconds
+const IMPORTANT_GAP = 15000; // 15 seconds
 
 // ---------------- SOCKETS ----------------
 io.on("connection", (socket) => {

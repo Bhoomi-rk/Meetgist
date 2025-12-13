@@ -14,6 +14,7 @@ const API_URL = "http://localhost:5000/api";
 let mediaRecorder = null;      // mic recorder
 let screenStream = null;       // display stream
 
+
 export default function App() {
   const [socket, setSocket] = useState(null);
   const socketRef = useRef(null);
@@ -68,6 +69,7 @@ s.on("important_image", ({ imageBase64 }) => {
     if (prev.includes(imageBase64)) return prev;
     return [imageBase64, ...prev];
   });
+  
 });
 
   // ✅ FIX: listen ONCE
