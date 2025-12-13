@@ -33,7 +33,7 @@ export default function App() {
   const [ocrText, setOcrText] = useState("");
   const [urgency, setUrgency] = useState("");
   const [importantImages, setImportantImages] = useState([]);
-
+  const [urgentSentences, setUrgentSentences] = useState([]);
  // state + ref
 const [status, setStatus] = useState("idle");
 const statusRef = useRef("idle");
@@ -44,70 +44,54 @@ const statusRef = useRef("idle");
   const canvasRef = useRef(null); // persistent offscreen canvas for capture
 
   // ---------- Socket setup ----------
-  useEffect(() => {
-    const s = io("http://localhost:5000");
-    socketRef.current = s;
-    setSocket(s);
+useEffect(() => {
+  const s = io("http://localhost:5000");
+  socketRef.current = s;
 
-    s.on("connect", () => console.log("Socket connected:", s.id));
+  s.on("connect", () => console.log("Socket connected:", s.id));
 
+  s.on("ocr_update", (p) => {
+    if (p?.ocrText) setOcrText(old => old ? old + "\n" + p.ocrText : p.ocrText);
+  });
 
-
-    s.on("ocr_update", (p) => {
-      if (p?.ocrText) setOcrText((old) => (old ? old + "\n" + p.ocrText : p.ocrText));
-    });
-
-    s.on("urgency_update", (p) => { if (p?.urgency) setUrgency(p.urgency); });
-
-    s.on("important_image", ({ meetingId, imageBase64, reason, words }) => {
-    console.log("📸 Important image received:", reason || "unknown");
-
-    // Save image to state
-    setImportantImages(prev => [imageBase64, ...prev]);
-
-   
+  s.on("urgency_update", (p) => {
+    if (p?.urgency) setUrgency(p.urgency);
+  });
+  s.on("request_screen_capture", async () => {
+  console.log("📸 Server requested screen capture");
+  await captureNow(); // this emits screen_frame
 });
 
 
-    s.on("summary_update", (data) => {
-      if (data.summary) setSummary(data.summary);
-      if (data.keyPoints) setKeyPoints(data.keyPoints);
-    });
+s.on("important_image", ({ imageBase64 }) => {
+  setImportantImages(prev => {
+    if (prev.includes(imageBase64)) return prev;
+    return [imageBase64, ...prev];
+  });
+});
 
-    // Urgent audio from server -> trigger safe auto-capture
-   s.on("urgent_audio_detected", () => {
-  if (statusRef.current !== "recording") {
-    console.log("⚠ Skipping urgent trigger: meeting not recording (status=" + statusRef.current + ")");
-    return;
-  }
+  // ✅ FIX: listen ONCE
+  s.on("urgent_sentences_detected", (data) => {
+    setUrgentSentences(prev => [...prev, ...data.urgentSentences]);
+  });
 
- if (!screenReadyRef.current) {
-   pendingAutoCapture.current = true;
-   return;
-}
+ s.on("meeting_ended", (meeting) => {
+  setTranscript(meeting.transcript || "");
+  setSummary(meeting.summary || "");
+  setKeyPoints(meeting.keyPoints || []);
+  setUrgentSentences(meeting.urgentSentences || []);
+  setImportantImages(meeting.importantImages || []);
+  setOcrText(meeting.ocrText || "");
+  setUrgency(meeting.urgency || "Normal");
 
-
-  safeAutoCapture();
+  // ✅ NOW the meeting is truly ended
+  setStatus("completed");
+  statusRef.current = "completed";
 });
 
 
-    s.on("connect_error", (err) => console.error("socket connect_error", err));
-
-    return () => {
-      try {
-        s.off("connect");
-        s.off("meeting_ended");
-        s.off("ocr_update");
-        s.off("urgency_update");
-        s.off("important_image");
-        s.off("summary_update");
-        s.off("urgent_audio_detected");
-        s.disconnect();
-      } catch (e) {}
-    };
-    // intentionally leave out dependencies to run once
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  return () => s.disconnect();
+}, []);
 
   // ---------- Start screen capture ----------
  const startScreen = async () => {
@@ -250,7 +234,8 @@ const statusRef = useRef("idle");
             socketRef.current.emit("audio_chunk", {
               meetingId: meetingRef.current._id,
               b64,
-              mimeType: event.data.type
+              mimeType: event.data.type,
+              status: "chunk"
             });
           };
           reader.readAsDataURL(event.data);
@@ -264,13 +249,28 @@ const statusRef = useRef("idle");
     }
   };
 
-  const stopRecordings = () => {
-    try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {}
-    try { if (screenStream) screenStream.getTracks().forEach(t => t.stop()); } catch {}
-    // reset screenReady/pending when stopping
-    setScreenReady(false);
-    pendingAutoCapture.current = false;
-  };
+ const stopRecordings = () => {
+  try {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.onstop = () => {
+        // 🔴 FINAL AUDIO FLUSH
+        socketRef.current?.emit("audio_chunk", {
+          meetingId: meetingRef.current?._id,
+          b64: "",               // backend will use saved audio file
+          mimeType: "audio/webm",
+          status: "end"          // ⭐ THIS IS CRITICAL
+        });
+      };
+      mediaRecorder.stop();
+    }
+  } catch {}
+
+  try { if (screenStream) screenStream.getTracks().forEach(t => t.stop()); } catch {}
+
+  setScreenReady(false);
+  pendingAutoCapture.current = false;
+};
+
 
   const startMeeting = async () => {
   setError(null);
@@ -298,13 +298,19 @@ const statusRef = useRef("idle");
 
 
   // ---------- End Meeting ----------
-  const endMeeting = async () => {
-    stopRecordings();
-    if (socketRef.current && meetingRef.current?._id) socketRef.current.emit("end_meeting", { meetingId: meetingRef.current._id });
-    setStatus("idle");
-statusRef.current = "idle";
+ const endMeeting = async () => {
+  stopRecordings();
 
-  };
+  if (socketRef.current && meetingRef.current?._id) {
+    socketRef.current.emit("end_meeting", {
+      meetingId: meetingRef.current._id
+    });
+  }
+
+  // ❌ DO NOT set status here
+  // wait for backend confirmation
+};
+
 
   // ---------- Render ----------
   return (
@@ -345,7 +351,16 @@ statusRef.current = "idle";
             <section className="box"><h3>Summary</h3><p>{summary || "..."}</p></section>
             <section className="box"><h3>Key Points</h3><ul>{keyPoints.map((k,i)=><li key={i}>{k}</li>)}</ul></section>
             <section className="box"><h3>OCR Text</h3><pre>{ocrText || "Extracting on-screen text..."}</pre></section>
-            <section className="box"><h3>Urgency</h3><p style={{color: urgency?.toLowerCase().includes("high") ? "red" : "black"}}>{urgency || "Detecting..."}</p></section>
+            <section className="box">
+             <h3>Urgent Points</h3>
+             <ul>
+             {urgentSentences.map((s, i) => (
+               <li key={i}>{s}</li>
+            ))}
+
+            </ul>
+            </section>
+
             <section className="box">
               <h3>Important Images</h3>
               {importantImages.length > 0 
