@@ -1,5 +1,3 @@
-
-// App.jsx — patched (auto-capture + pending queue + safe start)
 import React, { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
@@ -43,6 +41,11 @@ const statusRef = useRef("idle");
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null); // persistent offscreen canvas for capture
+  // ---------- TONE DETECTION ----------
+const analyserRef = useRef(null);     // reads live audio data
+const toneRef = useRef("Calm");       // stores last tone (no re-render)
+const [tone, setTone] = useState("Calm"); // shown in UI
+
 
   // ---------- Socket setup ----------
 useEffect(() => {
@@ -64,6 +67,7 @@ useEffect(() => {
 });
 
 
+
 s.on("important_image", ({ imageBase64 }) => {
   setImportantImages(prev => {
     if (prev.includes(imageBase64)) return prev;
@@ -76,6 +80,28 @@ s.on("important_image", ({ imageBase64 }) => {
   s.on("urgent_sentences_detected", (data) => {
     setUrgentSentences(prev => [...prev, ...data.urgentSentences]);
   });
+  const id = setInterval(() => {
+
+  // Run only while meeting is active
+  if (statusRef.current !== "recording") return;
+
+  const t = detectToneRealtime();
+
+  if (t !== toneRef.current) {
+    toneRef.current = t;
+    setTone(t);
+
+    // OPTIONAL: inform backend
+    if (socketRef.current && meetingRef.current?._id) {
+      socketRef.current.emit("tone_update", {
+        meetingId: meetingRef.current._id,
+        tone: t
+      });
+    }
+  }
+
+}, 5000);
+
 
  s.on("meeting_ended", (meeting) => {
   setTranscript(meeting.transcript || "");
@@ -92,7 +118,11 @@ s.on("important_image", ({ imageBase64 }) => {
 });
 
 
-  return () => s.disconnect();
+  return () => {
+  clearInterval(id);
+  s.disconnect();
+};
+
 }, []);
 
   // ---------- Start screen capture ----------
@@ -166,6 +196,23 @@ s.on("important_image", ({ imageBase64 }) => {
     console.log("✅ Everything ready → Capturing now!");
     await captureNow();
   };
+function detectToneRealtime() {
+  const analyser = analyserRef.current;
+  if (!analyser) return "Calm";
+
+  const buffer = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buffer);
+
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    sum += buffer[i] * buffer[i];  // square
+  }
+
+  const rms = Math.sqrt(sum / buffer.length); // loudness
+
+  // Threshold logic
+  return rms > 0.08 ? "Urgent" : "Calm";
+}
 
   // ---------- Capture Now ----------
   const captureNow = async () => {
@@ -187,7 +234,7 @@ s.on("important_image", ({ imageBase64 }) => {
     }
 
     // short delay so presenter has time to show the content (configurable)
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 1000));
 
     const canvas = canvasRef.current || document.createElement("canvas");
     canvas.width = video.videoWidth || 1280;
@@ -227,6 +274,16 @@ s.on("important_image", ({ imageBase64 }) => {
   const startMicRecorder = async () => {
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // ---------- REAL-TIME AUDIO ANALYSIS ----------
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+const source = audioContext.createMediaStreamSource(mic);
+const analyser = audioContext.createAnalyser();
+
+analyser.fftSize = 2048;   // resolution
+source.connect(analyser);  // mic → analyser
+
+analyserRef.current = analyser;
+
       mediaRecorder = new MediaRecorder(mic);
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0 && socketRef.current && meetingRef.current?._id) {
@@ -349,10 +406,10 @@ s.on("important_image", ({ imageBase64 }) => {
             {meeting && <h2>{meeting?.title || "No active meeting"}</h2>
 }
 
-            <section className="box"><h3>Transcript</h3><pre>{transcript || "Will appear after end..."}</pre></section>
+            {/* <section className="box"><h3>Transcript</h3><pre>{transcript || "Will appear after end..."}</pre></section> */}
             <section className="box"><h3>Summary</h3><p>{summary || "..."}</p></section>
             <section className="box"><h3>Key Points</h3><ul>{keyPoints.map((k,i)=><li key={i}>{k}</li>)}</ul></section>
-            <section className="box"><h3>OCR Text</h3><pre>{ocrText || "Extracting on-screen text..."}</pre></section>
+            {/* <section className="box"><h3>OCR Text</h3><pre>{ocrText || "Extracting on-screen text..."}</pre></section> */}
             <section className="box">
              <h3>Urgent Points</h3>
              <ul>
@@ -361,6 +418,10 @@ s.on("important_image", ({ imageBase64 }) => {
             ))}
 
             </ul>
+            </section>
+           <section className="box">
+               <h3>Speaker Tone</h3>
+                <p>{tone}</p>
             </section>
 
             <section className="box">

@@ -30,11 +30,12 @@ export default function MeetingDetails() {
 
       <h3>Summary</h3><p>{meeting.summary}</p>
 
-      <h3>Transcript</h3><pre>{meeting.transcript}</pre>
-
       <h3>Key Points</h3>
       <ul>{meeting.keyPoints?.map((x,i)=><li key={i}>{x}</li>)}</ul>
-
+      <section className="box">
+        <h3>Urgent notifications</h3>
+        <ul>{meeting.urgentSentences?.map((x,i)=><li key={i}>{x}</li>)}</ul>
+      </section>
       <section className="box">
         <h3>Important Images</h3>
           {meeting?.importantImages?.length > 0 ? (
