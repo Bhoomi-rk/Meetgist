@@ -33,6 +33,8 @@ export default function App() {
   const [urgency, setUrgency] = useState("");
   const [importantImages, setImportantImages] = useState([]);
   const [urgentSentences, setUrgentSentences] = useState([]);
+  const [selectedImage, setSelectedImage] = useState(null);
+
  // state + ref
 const [status, setStatus] = useState("idle");
 const statusRef = useRef("idle");
@@ -424,16 +426,80 @@ analyserRef.current = analyser;
                 <p>{tone}</p>
             </section>
 
-            <section className="box">
-              <h3>Important Images</h3>
-              {importantImages.length > 0 
-                ? <div style={{display:"flex",flexWrap:"wrap",gap:12}}>
-                    {importantImages.map((img,i)=>(<img key={i} src={img} style={{width:180,borderRadius:8}} />))}
-                  </div>
-                : "No important images yet..."}
-            </section>
+          <section className="box">
+  <h3>Important Images</h3>
+
+  {importantImages.length > 0 ? (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+      {importantImages.map((img, i) => (
+        <img
+          key={i}
+          src={img}
+          alt={`important-${i}`}
+          style={{
+            width: 180,
+            borderRadius: 8,
+            cursor: "pointer",
+            border: "2px solid #eee"
+          }}
+          onClick={() => setSelectedImage(img)}   // 👈 OPEN
+        />
+      ))}
+    </div>
+  ) : (
+    "No important images yet..."
+  )}
+</section>
+
 
             {error && <div className="error">{error}</div>}
+            {selectedImage && (
+  <div
+    onClick={() => setSelectedImage(null)}
+    style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100vw",
+      height: "100vh",
+      backgroundColor: "rgba(0,0,0,0.85)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999
+    }}
+  >
+    <img
+      src={selectedImage}
+      alt="Full view"
+      style={{
+        maxWidth: "90%",
+        maxHeight: "90%",
+        borderRadius: 10,
+        boxShadow: "0 0 20px black"
+      }}
+      onClick={(e) => e.stopPropagation()} // prevent close when clicking image
+    />
+
+    {/* Close button */}
+    <button
+      onClick={() => setSelectedImage(null)}
+      style={{
+        position: "absolute",
+        top: 20,
+        right: 30,
+        fontSize: 24,
+        background: "transparent",
+        color: "white",
+        border: "none",
+        cursor: "pointer"
+      }}
+    >
+      ✕
+    </button>
+  </div>
+)}
+
           </main>
         </>
       } />

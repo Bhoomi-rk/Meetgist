@@ -7,6 +7,8 @@ export default function MeetingDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [meeting, setMeeting] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null);
+
 
   useEffect(() => {
     fetch(`${API_URL}/meetings/${id}`)
@@ -38,15 +40,21 @@ export default function MeetingDetails() {
       </section>
       <section className="box">
         <h3>Important Images</h3>
-          {meeting?.importantImages?.length > 0 ? (
-        <div style={{display:"flex",flexWrap:"wrap",gap:"10px"}}>
-           {meeting.importantImages.map((img,i)=>(
-          <img key={i} src={img} alt="important" style={{width:"200px",borderRadius:"8px"}} />
-        ))}
-    </div>
-     ) : (
-    <p>No important images captured.</p>
-  )}
+         {meeting.importantImages.map((img, i) => (
+  <img
+    key={i}
+    src={img}
+    alt="important"
+    style={{
+      width: "200px",
+      borderRadius: "8px",
+      cursor: "pointer",
+      border: "2px solid #eee"
+    }}
+    onClick={() => setSelectedImage(img)}   // 👈 OPEN IMAGE
+  />
+))}
+
 </section>
 
 
@@ -55,6 +63,52 @@ export default function MeetingDetails() {
       }}>
         Delete Meeting
       </button>
+      {selectedImage && (
+  <div
+    onClick={() => setSelectedImage(null)}
+    style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100vw",
+      height: "100vh",
+      background: "rgba(0,0,0,0.85)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999
+    }}
+  >
+    <img
+      src={selectedImage}
+      alt="Full View"
+      style={{
+        maxWidth: "90%",
+        maxHeight: "90%",
+        borderRadius: "10px",
+        boxShadow: "0 0 25px black"
+      }}
+      onClick={(e) => e.stopPropagation()} // prevent close on image click
+    />
+
+    <button
+      onClick={() => setSelectedImage(null)}
+      style={{
+        position: "absolute",
+        top: 20,
+        right: 30,
+        fontSize: "24px",
+        background: "transparent",
+        color: "white",
+        border: "none",
+        cursor: "pointer"
+      }}
+    >
+      ✕
+    </button>
+  </div>
+)}
+
     </div>
   );
 }

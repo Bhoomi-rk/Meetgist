@@ -116,6 +116,7 @@ function detectTextUrgency(text) {
 }
 // Detect visual urgency from text (placeholder, can be improved)
 function detectVisualUrgency(text) {
+  console.log("Detecting visual urgency in text:", text);
   if (!text) return false;
   return VISUAL_URGENCY.some(k => text.toLowerCase().includes(k));
 }
@@ -268,7 +269,7 @@ async function analyzeUrgency(combinedText) {
 const activeTranscription = {};
 const lastImageSave = {};
 const lastVisualCapture = {};
-const IMPORTANT_GAP = 15000; // 15 seconds
+const VISUAL_CAPTURE_GAP = 15000; // 15 seconds
 
 // ---------------- SOCKETS ----------------
 io.on("connection", (socket) => {
@@ -281,7 +282,7 @@ io.on("connection", (socket) => {
 
  socket.on("audio_chunk", async ({ meetingId, b64, mimeType, status }) => {
   if (!meetingId || !b64) return;
-
+  
   const file = saveChunk(meetingId, b64, mimeType);
 
   // ✅ ONLY final audio triggers STT + urgency
